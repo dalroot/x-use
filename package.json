@@ -1,0 +1,33 @@
+{
+  "name": "x-use",
+  "version": "1.0.0",
+  "description": "Browserless X (Twitter) CLI & SDK built for AI Agents (agent-x-use)",
+  "main": "src/index.js",
+  "bin": {
+    "xuse": "./bin/x-use.js",
+    "x-use": "./bin/x-use.js",
+    "agent-x-use": "./bin/x-use.js"
+  },
+  "scripts": {
+    "test": "node --check src/index.js src/client.js src/constants.js src/auth.js src/transport.js src/operations/tweets.js src/operations/users.js bin/x-use.js"
+  },
+  "keywords": [
+    "twitter",
+    "x",
+    "agent",
+    "browserless",
+    "cli",
+    "automation",
+    "ai-agent",
+    "x-use"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "linkedom": "^0.18.0",
+    "socks-proxy-agent": "^10.1.0",
+    "x-client-transaction-id": "^0.3.3"
+  }
+}

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 160" width="640" height="160" fill="none">
+  <!-- X-style Black Rounded Emblem (Transparent Canvas, Dark Mode Border) -->
+  <rect x="24" y="24" width="112" height="112" rx="26" fill="#000000" stroke="#2F3336" stroke-width="2.5" />
+
+  <!-- Official X-inspired Double-Stroke Mark in Crisp White -->
+  <path d="M97.5 48H109.5L83.3 77.9L114 112H89.9L71 90.2L49.4 112H37.4L65.4 80.1L36 48H60.7L77.8 67.8L97.5 48ZM93.3 105.5H100L57 54.2H49.8L93.3 105.5Z" fill="#FFFFFF" />
+
+  <!-- Subtle Agent Node Accent -->
+  <circle cx="116" cy="44" r="5" fill="#1D9BF0" />
+
+  <!-- Wordmark: x-use (X Dark Mode White) -->
+  <text x="164" y="92" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="68" font-weight="800" letter-spacing="-2" fill="#F7F9F9">
+    x-use
+  </text>
+
+  <!-- Tagline -->
+  <text x="168" y="124" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="15.5" font-weight="600" letter-spacing="2.2" fill="#71767B">
+    BROWSERLESS X CLI &amp; SDK FOR AI AGENTS
+  </text>
+</svg>
