@@ -8,8 +8,8 @@ const DEFAULT_QUERY_IDS = {
   CreateTweet: 'wR5Z_lEibLvkew3tF9w-Sg',
   DeleteTweet: 'nxpZCY2K-I6QoFHAHeojFQ',
   UserByScreenName: 'AMIBMjtxEEATh4z8V9GtRg',
-  UserTweetsAndReplies: 'bnsYxFljT6y98rFwiGr3fw',
-  SearchTimeline: 'irezafrnzav4Ulf1vDkEBg',
+  UserTweetsAndReplies: 'FmuxExUC21Xn_C2NwtX5sQ',
+  SearchTimeline: 'vLHjqbDv7TPFMBkIIO1nOA',
   FavoriteTweet: 'lI07N6Otwv1PhnEgXILM7A',
   CreateRetweet: 'mbRO74GrOvSfRcJnlMapnQ'
 };

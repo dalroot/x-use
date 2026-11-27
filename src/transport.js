@@ -52,8 +52,12 @@ function createProxyAgent(rawProxy) {
 
 /**
  * Perform a raw HTTPS request over Node's built-in https module.
+ * Retries transient network failures (e.g. flaky tunnel dropping the
+ * socket with "Socket closed") up to 5 times before giving up,
+ * matching the Python side's 5-attempt retry on the same tunnel.
+ * Only network errors are retried; HTTP error statuses resolve normally.
  */
-function httpRequest(options, postData = null, agent = null) {
+function httpRequest(options, postData = null, agent = null, attempt = 1) {
   return new Promise((resolve, reject) => {
     const reqOpts = {
       ...options,
@@ -70,7 +74,17 @@ function httpRequest(options, postData = null, agent = null) {
         });
       });
     });
-    req.on('error', reject);
+    req.on('error', (err) => {
+      if (attempt < 5) {
+        setTimeout(() => {
+          httpRequest(options, postData, agent, attempt + 1).then(resolve, reject);
+        }, 2000 * attempt);
+      } else {
+        reject(err);
+      }
+    });
+    req.on('timeout', () => req.destroy(new Error('Socket closed')));
+    req.setTimeout(60000);
     if (postData) req.write(postData);
     req.end();
   });
