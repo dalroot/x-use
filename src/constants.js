@@ -1,39 +1,15 @@
 const BEARER_TOKEN =
   'Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
 
-const API_X_HOST = 'api.x.com';
-
 const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
-
-const DEFAULT_EXPLORE_TIMELINE_ID = 'VGltZWxpbmU6DAC2CwABAAAAB2Zvcl95b3UAAA==';
-
-const X_WEB_RELAY_DEFAULTS = {
-  __relay_internal__pv__xclientsfeaturesappviewerisloggedinrelayprovider: true,
-  __relay_internal__pv__xclientsfeaturestranslationgroktranslatedpostenabledrelayprovider: true,
-  __relay_internal__pv__replydownvoteenabledrelayprovider: false,
-  __relay_internal__pv__postctafetchenabledrelayprovider: true,
-  __relay_internal__pv__xclientsfeaturestweetcomponentsgrokanalyzepostrelayprovider: true,
-  __relay_internal__pv__xclientsfeaturestranslationnoteautotranslationenabledrelayprovider: true,
-  __relay_internal__pv__liveeventpostcontextenabledrelayprovider: true,
-  __relay_internal__pv__xclientsfeaturestweetsportspostcontextenabledrelayprovider: true,
-  __relay_internal__pv__timelineuserbioautotranslationrelayprovider: true
-};
 
 const DEFAULT_QUERY_IDS = {
   CreateTweet: 'wR5Z_lEibLvkew3tF9w-Sg',
   DeleteTweet: 'nxpZCY2K-I6QoFHAHeojFQ',
   UserByScreenName: 'AMIBMjtxEEATh4z8V9GtRg',
-  UserByScreenNameWeb: 'Vs4wvILQLHuuofaxvQV6cA',
-  UserOriginalsTimeline: 'AmKuSHqE8nVKyApBx2ZB8Q',
-  UserRepostsTimeline: 'HFq4t1MffewIPWMZBcoomw',
-  SearchByRawQuery: 'JO8RtNz_J5A3QZ5AsGktmg',
-  HomeTimeline: 'cLqL-B9IUSFzJYVDQT03Ag',
-  ExploreTimeline: 'xDfil0NbyvMRC7HhPsDxQA',
-  TweetResultByRestId: '-GMof_5oJA0AyqlzZpJS2w',
-  NotificationsQuery: 'L3HyjmrwBCEyGLEpBT1oQA',
-  GlobalSearchTypeahead: 'qzTmbplKbPAC6zbDDAlWxQ',
-  VerifiedFollowers: 'C6OVpqoet-2SFfRAKPN3yQ',
+  UserTweetsAndReplies: 'bnsYxFljT6y98rFwiGr3fw',
+  SearchTimeline: 'irezafrnzav4Ulf1vDkEBg',
   FavoriteTweet: 'lI07N6Otwv1PhnEgXILM7A',
   CreateRetweet: 'mbRO74GrOvSfRcJnlMapnQ'
 };
@@ -79,10 +55,7 @@ const PROFILE_READ_FEATURES = {
 
 module.exports = {
   BEARER_TOKEN,
-  API_X_HOST,
   DEFAULT_USER_AGENT,
-  DEFAULT_EXPLORE_TIMELINE_ID,
-  X_WEB_RELAY_DEFAULTS,
   DEFAULT_QUERY_IDS,
   TWEET_WRITE_FEATURES,
   TIMELINE_READ_FEATURES,

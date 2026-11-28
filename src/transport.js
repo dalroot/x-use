@@ -52,14 +52,8 @@ function createProxyAgent(rawProxy) {
 
 /**
  * Perform a raw HTTPS request over Node's built-in https module.
- * Retries transient network failures up to 2 times for idempotent GET requests
- * to avoid duplicate writes or triggering anti-automation rate limits.
- * HTTP error statuses resolve normally without retrying.
  */
-function httpRequest(options, postData = null, agent = null, attempt = 1) {
-  const isGet = (options.method || 'GET').toUpperCase() === 'GET';
-  const maxAttempts = isGet ? 3 : 1;
-
+function httpRequest(options, postData = null, agent = null) {
   return new Promise((resolve, reject) => {
     const reqOpts = {
       ...options,
@@ -76,17 +70,7 @@ function httpRequest(options, postData = null, agent = null, attempt = 1) {
         });
       });
     });
-    req.on('error', (err) => {
-      if (attempt < maxAttempts) {
-        setTimeout(() => {
-          httpRequest(options, postData, agent, attempt + 1).then(resolve, reject);
-        }, 2000 * attempt);
-      } else {
-        reject(err);
-      }
-    });
-    req.on('timeout', () => req.destroy(new Error('Socket closed')));
-    req.setTimeout(60000);
+    req.on('error', reject);
     if (postData) req.write(postData);
     req.end();
   });
