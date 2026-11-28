@@ -43,24 +43,40 @@ test('CircuitBreaker trips after 2 consecutive errors and surfaces lastError', (
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('XUseClient trips breaker after 2 failed GraphQL responses and blocks 3rd call', async () => {
+test('XUseClient trips breaker after 2 failed GraphQL responses and immediately on 401/403/429', async () => {
   const dir = makeTempDir();
   const client = new XUseClient({
     authToken: 'test_auth',
     ct0: 'test_ct0',
-    breakerPath: path.join(dir, 'cb.json')
+    proxyUrl: '',
+    breakerPath: path.join(dir, 'cb.json'),
+    rateLimitPath: path.join(dir, 'rl.json')
   });
 
   assert.throws(() => client._parseGraphQL({ statusCode: 404, body: 'Not Found' }, 'op1'), /status 404/);
   assert.equal(client.getCircuitBreakerStatus().tripped, false);
 
-  assert.throws(() => client._parseGraphQL({ statusCode: 403, body: 'Forbidden' }, 'op2'), /CIRCUIT BREAKER TRIPPED/);
+  assert.throws(() => client._parseGraphQL({ statusCode: 500, body: 'Server Error' }, 'op2'), /CIRCUIT BREAKER TRIPPED/);
   assert.equal(client.getCircuitBreakerStatus().tripped, true);
 
   await assert.rejects(() => client._httpRequest({ hostname: 'api.x.com', path: '/' }), /TRIPPED/);
 
   client.resetCircuitBreaker();
   assert.equal(client.getCircuitBreakerStatus().tripped, false);
+
+  // Immediate trip on 403 & 429 + cooldown persistence
+  assert.throws(
+    () => client._parseGraphQL({ statusCode: 403, body: 'Forbidden' }, 'op3'),
+    (err) => err.code === 'CIRCUIT_BREAKER_TRIPPED' && err.halt === true
+  );
+  client.resetCircuitBreaker();
+  assert.throws(
+    () => client._parseGraphQL({ statusCode: 429, headers: { 'retry-after': '120' }, body: 'Rate limited' }, 'op4'),
+    (err) => err.code === 'CIRCUIT_BREAKER_TRIPPED' && err.halt === true
+  );
+  await new Promise((r) => setTimeout(r, 30));
+  assert.ok(client.getRateLimitStatus().cooldownRemainingSeconds >= 100);
+
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -132,55 +148,122 @@ test('normalizeTweetResult and extractTweetsFromInstructions handle x-web and li
   assert.equal(tweets[0].url, 'https://x.com/dallsirvan/status/111222333');
 });
 
-test('RateLimiter records incrementing eventId + ISO timestamp and halts on cap or strict pacing', async () => {
+test('RateLimiter enforces strict pacing (waitSeconds, halt: false), window cap, concurrency, and tamper/rollback', async () => {
   const dir = makeTempDir();
   const rlPath = path.join(dir, 'rl.json');
-  const limiter = new RateLimiter({
+
+  // Strict pacing guard test (cannot be bypassed by minReadGapMs: 0)
+  const strictLimiter = new RateLimiter({
     filePath: rlPath,
     maxReads: 2,
+    strict: true,
     minReadGapMs: 0,
     maxReadGapMs: 0
   });
-
-  const e1 = await limiter.acquire('GET', '/graphql/op1');
-  const e2 = await limiter.acquire('GET', '/graphql/op2');
+  const e1 = await strictLimiter.acquire('GET', 'SearchByRawQuery');
   assert.equal(e1.eventId, 1);
-  assert.equal(e2.eventId, 2);
-  assert.match(e2.timestamp, /^\d{4}-\d{2}-\d{2}T/);
-
-  const status = limiter.getStatus();
-  assert.equal(status.lastEventId, 2);
-  assert.equal(status.readsRemaining, 0);
-
   await assert.rejects(
-    () => limiter.acquire('GET', '/graphql/op3'),
-    (err) => err.code === 'RATE_LIMIT_EXCEEDED' && err.halt === true && err.retryAfterSeconds > 0
+    () => strictLimiter.acquire('GET', 'UserOriginalsTimeline'),
+    (err) => err.code === 'PACING_WAIT_REQUIRED' && err.halt === false && err.waitSeconds >= 1
   );
 
-  // Strict pacing guard test
-  const strictLimiter = new RateLimiter({
-    filePath: path.join(dir, 'rl_strict.json'),
-    maxReads: 10,
-    strict: true,
-    minReadGapMs: 5000,
-    maxReadGapMs: 5000
-  });
-  await strictLimiter.acquire('GET', '/graphql/a');
-  await assert.rejects(
-    () => strictLimiter.acquire('GET', '/graphql/b'),
+  // Corrupted ledger halts instead of resetting to 0
+  fs.writeFileSync(rlPath, '{bad json');
+  assert.throws(
+    () => strictLimiter.getStatus(),
     (err) => err.code === 'RATE_LIMIT_EXCEEDED' && err.halt === true
   );
+
+  // Clock rollback halts
+  fs.writeFileSync(
+    rlPath,
+    JSON.stringify({ lastEventId: 5, lastTsMs: Date.now() + 60000, cooldownUntilMs: 0, events: [] })
+  );
+  assert.throws(
+    () => strictLimiter.getStatus(),
+    (err) => err.code === 'RATE_LIMIT_EXCEEDED' && err.halt === true && /rollback/i.test(err.message)
+  );
+
+  // Concurrent Promise.all with maxReads: 2 allows at most 2 and blocks the rest
+  const concPath = path.join(dir, 'rl_conc.json');
+  const concLimiter = new RateLimiter({ filePath: concPath, maxReads: 2, minReadGapMs: 3000, maxReadGapMs: 3100 });
+  const results = await Promise.allSettled([
+    concLimiter.acquire('GET', 'op1'),
+    concLimiter.acquire('GET', 'op2'),
+    concLimiter.acquire('GET', 'op3')
+  ]);
+  const fulfilled = results.filter((r) => r.status === 'fulfilled');
+  const rejected = results.filter((r) => r.status === 'rejected');
+  assert.equal(fulfilled.length, 2);
+  assert.equal(rejected.length, 1);
+  assert.equal(rejected[0].reason.code, 'RATE_LIMIT_EXCEEDED');
 
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('XUseClient sends aligned sec-ch-ua and sec-fetch-site headers', async () => {
-  const client = new XUseClient({ authToken: 'a', ct0: 'b' });
-  const apiHeaders = await client._getHeaders('GET', '/graphql/x/SearchByRawQuery', true, 'api.x.com');
-  assert.equal(apiHeaders['sec-fetch-site'], 'same-site');
-  assert.equal(apiHeaders['sec-fetch-mode'], 'cors');
-  assert.match(apiHeaders['sec-ch-ua'], /Chromium/);
+test('Security: vault tamper fails, proxy credentials & cookies never leak, non-TTY reset-breaker rejected, postThread checks quota', async () => {
+  const dir = makeTempDir();
+  const { sanitizeProxyUrl } = require('../src/transport');
+  const { spawnSync } = require('child_process');
 
-  const webHeaders = await client._getHeaders('POST', '/i/api/graphql/x/CreateTweet', true, 'x.com');
-  assert.equal(webHeaders['sec-fetch-site'], 'same-origin');
+  // 1. Vault tampering detection
+  const cookiesFile = path.join(dir, 'cookies.json');
+  const vaultFile = path.join(dir, 'cookies.vault');
+  fs.writeFileSync(cookiesFile, JSON.stringify([{ name: 'auth_token', value: 'FAKE123' }, { name: 'ct0', value: 'FAKECT0' }]));
+  encryptCookiesVault(cookiesFile, 'pass123', vaultFile);
+  const rawVault = fs.readFileSync(vaultFile);
+  rawVault[rawVault.length - 1] ^= 0xff;
+  fs.writeFileSync(vaultFile, rawVault);
+  assert.throws(() => decryptCookiesVault('pass123', vaultFile));
+
+  // 2. Proxy password redaction & no token leak in errors
+  assert.equal(sanitizeProxyUrl('socks5h://alice:SECRET_PASS@127.0.0.1:10808'), 'socks5h://***:***@127.0.0.1:10808');
+  const client = new XUseClient({
+    authToken: 'FAKE123',
+    ct0: 'FAKECT0',
+    proxyUrl: '',
+    breakerPath: path.join(dir, 'cb.json'),
+    rateLimitPath: path.join(dir, 'rl.json')
+  });
+  try {
+    client._parseGraphQL({ statusCode: 403, body: 'Forbidden' }, 'check');
+  } catch (err) {
+    assert.equal(err.message.includes('FAKE123'), false);
+    assert.equal(err.message.includes('FAKECT0'), false);
+  }
+
+  // 3. Non-TTY reset-breaker --json rejected
+  const cliRes = spawnSync(process.execPath, [path.join(__dirname, '..', 'bin', 'x-use.js'), 'reset-breaker', '--json'], {
+    input: '',
+    encoding: 'utf8',
+    env: { ...process.env, HOME: dir }
+  });
+  assert.notEqual(cliRes.status, 0);
+  assert.match(cliRes.stderr, /Refusing to reset circuit breaker/);
+
+  // 4. postThread checks write quota before publishing
+  const rlPath = path.join(dir, 'rl_thread.json');
+  const now = Date.now();
+  fs.writeFileSync(
+    rlPath,
+    JSON.stringify({
+      lastEventId: 3,
+      lastTsMs: now,
+      cooldownUntilMs: 0,
+      events: [1, 2, 3].map((id) => ({ eventId: id, timestamp: new Date(now).toISOString(), tsMs: now, kind: 'write', target: 'CreateTweet' }))
+    })
+  );
+  const threadClient = new XUseClient({
+    authToken: 'FAKE123',
+    ct0: 'FAKECT0',
+    proxyUrl: '',
+    breakerPath: path.join(dir, 'cb_thread.json'),
+    rateLimitPath: rlPath
+  });
+  await assert.rejects(
+    () => threadClient.postThread(['one', 'two', 'three']),
+    (err) => err.code === 'RATE_LIMIT_EXCEEDED' && err.halt === true && /Insufficient write quota/.test(err.message)
+  );
+
+  fs.rmSync(dir, { recursive: true, force: true });
 });

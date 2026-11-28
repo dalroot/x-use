@@ -76,14 +76,15 @@ class XUseClient {
 
   async _httpRequest(options, postData = null) {
     this.circuitBreaker.assertReady();
-    this.lastEvent = await this.rateLimiter.acquire(options.method || 'GET', options.path || '');
+    const opName = options.operationName || String(options.path || '').split('/').pop().split('?')[0] || options.method || 'GET';
+    this.lastEvent = await this.rateLimiter.acquire(options.method || 'GET', opName);
     try {
       return await httpRequest(options, postData, this.agent);
     } catch (err) {
       const state = this.circuitBreaker.recordFailure(err.message);
       if (state.tripped) {
         const trippedErr = new Error(
-          `${err.message} | SAFETY CIRCUIT BREAKER TRIPPED (${state.consecutiveErrors} consecutive errors). Run "xuse reset-breaker" after resolving.`
+          `${err.message} | SAFETY CIRCUIT BREAKER TRIPPED (${state.consecutiveErrors} consecutive errors). STOP and notify the user.`
         );
         trippedErr.code = 'CIRCUIT_BREAKER_TRIPPED';
         trippedErr.halt = true;
@@ -94,30 +95,33 @@ class XUseClient {
     }
   }
 
-  _getGraphQL(fullPath, headers) {
+  _getGraphQL(fullPath, headers, operationName = '') {
     return this._httpRequest({
       hostname: 'x.com',
       path: fullPath,
       method: 'GET',
+      operationName,
       headers
     });
   }
 
-  _getApiGraphQL(fullPath, headers) {
+  _getApiGraphQL(fullPath, headers, operationName = '') {
     return this._httpRequest({
       hostname: API_X_HOST,
       path: fullPath,
       method: 'GET',
+      operationName,
       headers
     });
   }
 
-  _postGraphQL(apiPath, headers, payload) {
+  _postGraphQL(apiPath, headers, payload, operationName = '') {
     return this._httpRequest(
       {
         hostname: 'x.com',
         path: apiPath,
         method: 'POST',
+        operationName,
         headers: {
           ...headers,
           'content-length': Buffer.byteLength(payload)
@@ -133,10 +137,23 @@ class XUseClient {
       this.circuitBreaker.recordSuccess();
       return parsed;
     } catch (err) {
-      const state = this.circuitBreaker.recordFailure(err.message);
+      const status = res?.statusCode;
+      const isImmediate = status === 401 || status === 403 || status === 429;
+      if (status === 429 && res?.headers) {
+        const retryAfter = Number(res.headers['retry-after']);
+        const resetAt = Number(res.headers['x-rate-limit-reset']);
+        let cooldownSec = 60;
+        if (Number.isFinite(retryAfter) && retryAfter > 0) {
+          cooldownSec = retryAfter;
+        } else if (Number.isFinite(resetAt) && resetAt > 0) {
+          cooldownSec = Math.max(1, resetAt - Math.floor(Date.now() / 1000));
+        }
+        this.rateLimiter.recordCooldown(cooldownSec).catch(() => {});
+      }
+      const state = this.circuitBreaker.recordFailure(err.message, { immediate: isImmediate });
       if (state.tripped) {
         const trippedErr = new Error(
-          `${err.message} | SAFETY CIRCUIT BREAKER TRIPPED (${state.consecutiveErrors} consecutive errors). Run "xuse reset-breaker" after resolving.`
+          `${err.message} | SAFETY CIRCUIT BREAKER TRIPPED (${state.consecutiveErrors} consecutive errors). STOP and notify the user.`
         );
         trippedErr.code = 'CIRCUIT_BREAKER_TRIPPED';
         trippedErr.halt = true;
@@ -234,14 +251,6 @@ class XUseClient {
       'x-twitter-active-user': 'yes',
       'x-twitter-auth-type': 'OAuth2Session',
       'x-twitter-client-language': 'en',
-      'sec-ch-ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-      'sec-ch-ua-mobile': '?0',
-      'sec-ch-ua-platform': '"Linux"',
-      'sec-fetch-dest': 'empty',
-      'sec-fetch-mode': 'cors',
-      'sec-fetch-site': targetHost === 'api.x.com' ? 'same-site' : 'same-origin',
-      'accept-language': 'en-US,en;q=0.9',
-      priority: 'u=1, i',
       'user-agent': this.userAgent,
       'content-type': 'application/json',
       accept: '*/*'

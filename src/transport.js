@@ -51,14 +51,30 @@ function createProxyAgent(rawProxy) {
 }
 
 /**
- * Perform a raw HTTPS request over Node's built-in https module.
- * Retries transient network failures up to 2 times for idempotent GET requests
- * to avoid duplicate writes or triggering anti-automation rate limits.
- * HTTP error statuses resolve normally without retrying.
+ * Redact embedded credentials (user:pass@) from a proxy URL before logging or printing.
+ * @param {string|null|undefined} proxyUrl
+ * @returns {string|null}
  */
-function httpRequest(options, postData = null, agent = null, attempt = 1) {
-  const maxAttempts = 1;
+function sanitizeProxyUrl(proxyUrl) {
+  if (!proxyUrl) return null;
+  try {
+    const u = new URL(proxyUrl);
+    if (u.username || u.password) {
+      u.username = '***';
+      u.password = '***';
+    }
+    return u.toString().replace(/\/$/, '');
+  } catch (_) {
+    return String(proxyUrl).replace(/\/\/[^/@]+@/, '//***:***@');
+  }
+}
 
+/**
+ * Perform a single raw HTTPS request over Node's built-in https module.
+ * Never retries automatically to avoid duplicate writes or triggering anti-automation limits.
+ * HTTP error statuses resolve normally so the caller can trip the safety circuit breaker.
+ */
+function httpRequest(options, postData = null, agent = null) {
   return new Promise((resolve, reject) => {
     const reqOpts = {
       ...options,
@@ -75,15 +91,7 @@ function httpRequest(options, postData = null, agent = null, attempt = 1) {
         });
       });
     });
-    req.on('error', (err) => {
-      if (attempt < maxAttempts) {
-        setTimeout(() => {
-          httpRequest(options, postData, agent, attempt + 1).then(resolve, reject);
-        }, 2000 * attempt);
-      } else {
-        reject(err);
-      }
-    });
+    req.on('error', reject);
     req.on('timeout', () => req.destroy(new Error('Socket closed')));
     req.setTimeout(35000);
     if (postData) req.write(postData);
@@ -96,7 +104,10 @@ function httpRequest(options, postData = null, agent = null, attempt = 1) {
  */
 function parseGraphQLResponse(res, actionName) {
   if (res.statusCode !== 200) {
-    throw new Error(`${actionName} failed with status ${res.statusCode}: ${res.body}`);
+    const err = new Error(`${actionName} failed with status ${res.statusCode}: ${res.body}`);
+    err.statusCode = res.statusCode;
+    err.headers = res.headers || {};
+    throw err;
   }
   const data = JSON.parse(res.body);
   if (data.errors && data.errors.length > 0) {
@@ -107,6 +118,7 @@ function parseGraphQLResponse(res, actionName) {
 
 module.exports = {
   createProxyAgent,
+  sanitizeProxyUrl,
   httpRequest,
   parseGraphQLResponse
 };

@@ -11,6 +11,7 @@ const {
 } = require('../src/auth');
 const { CircuitBreaker } = require('../src/circuit_breaker');
 const { RateLimiter } = require('../src/rate_limiter');
+const { sanitizeProxyUrl } = require('../src/transport');
 
 function printHelp() {
   console.log(`xuse (x-use / agent-x-use) — Browserless X (Twitter) CLI for AI Agents
@@ -86,7 +87,7 @@ async function runInteractiveMenu(baseFlags) {
           ? 'token: configured'
           : 'not configured';
 
-      console.log(`Auth: [${authStatus}] | Proxy: [${saved.proxyUrl || baseFlags.proxy || 'auto/direct'}]`);
+      console.log(`Auth: [${authStatus}] | Proxy: [${sanitizeProxyUrl(saved.proxyUrl || baseFlags.proxy) || 'auto/direct'}]`);
       console.log(`
   1) check    — Verify X session
   2) profile  — Lookup user profile
@@ -108,7 +109,7 @@ async function runInteractiveMenu(baseFlags) {
       try {
         if (choice === '1' || choice === 'check') {
           await client.init();
-          console.log('✓ Connected:', { txReady: Boolean(client.transaction), proxy: client.proxyUrl || 'direct' });
+          console.log('✓ Connected:', { txReady: Boolean(client.transaction), proxy: sanitizeProxyUrl(client.proxyUrl) || 'direct' });
         } else if (choice === '2' || choice === 'profile') {
           const u = await ask(rl, 'Username (without @): ');
           const res = await client.getProfile(u);
@@ -200,17 +201,22 @@ async function runInteractiveMenu(baseFlags) {
     }
     const savedTo = saveConfig(updates);
     if (flags.json) {
-      console.log(JSON.stringify({ ok: true, data: { configPath: savedTo, ...updates } }, null, 2));
+      const safeUpdates = {
+        ...updates,
+        ...(updates.proxyUrl ? { proxyUrl: sanitizeProxyUrl(updates.proxyUrl) } : {})
+      };
+      console.log(JSON.stringify({ ok: true, data: { configPath: savedTo, ...safeUpdates } }, null, 2));
     } else {
       console.log('✓ Configuration saved to', savedTo);
     }
     process.exit(0);
   }
 
+  const strictRateLimit = flags.strict || flags.json || !process.stdin.isTTY;
   const client = new XUseClient({
     ...(flags.cookies ? { cookiesPath: flags.cookies } : {}),
     ...(flags.proxy ? { proxyUrl: flags.proxy } : {}),
-    ...(flags.strict ? { strictRateLimit: true } : {})
+    ...(strictRateLimit ? { strictRateLimit: true } : {})
   });
 
   try {
@@ -218,7 +224,7 @@ async function runInteractiveMenu(baseFlags) {
     switch (command) {
       case 'check':
         await client.init();
-        result = { ok: true, txReady: Boolean(client.transaction), proxy: client.proxyUrl || 'direct' };
+        result = { ok: true, txReady: Boolean(client.transaction), proxy: sanitizeProxyUrl(client.proxyUrl) || 'direct' };
         break;
       case 'profile':
         if (!args[0]) throw new Error('Missing <username>');
@@ -286,6 +292,11 @@ async function runInteractiveMenu(baseFlags) {
         result = new CircuitBreaker().getStatus();
         break;
       case 'reset-breaker':
+        if (!process.stdin.isTTY || flags.json) {
+          throw new Error(
+            'Refusing to reset circuit breaker in non-interactive or --json mode. A human must run "xuse reset-breaker" in a terminal.'
+          );
+        }
         result = new CircuitBreaker().reset();
         break;
       case 'limits':
@@ -318,12 +329,24 @@ async function runInteractiveMenu(baseFlags) {
         ...(err.code === 'CIRCUIT_BREAKER_TRIPPED' ? { circuitBreakerTripped: true } : {}),
         ...(err.code === 'RATE_LIMIT_EXCEEDED'
           ? { rateLimitExceeded: true, retryAfterSeconds: err.retryAfterSeconds }
+          : {}),
+        ...(err.code === 'PACING_WAIT_REQUIRED'
+          ? { halt: false, pacingWait: true, waitSeconds: err.waitSeconds }
+          : {}),
+        ...(Array.isArray(err.published)
+          ? { published: err.published.map(({ raw, ...rest }) => rest) }
           : {})
       };
       console.error(JSON.stringify(payload, null, 2));
     } else {
       console.error('Error:', err.message);
     }
-    process.exit(1);
+    const exitCode =
+      err.code === 'RATE_LIMIT_EXCEEDED' || err.code === 'PACING_WAIT_REQUIRED'
+        ? 2
+        : err.code === 'CIRCUIT_BREAKER_TRIPPED'
+          ? 3
+          : 1;
+    process.exit(exitCode);
   }
 })();

@@ -1,11 +1,11 @@
 ---
 name: x-use
-description: Browserless X (Twitter) CLI and SDK for AI agents. Use to read timelines, search, fetch tweets by URL, watch notifications safely, and publish tweets/threads/replies without Chrome or Puppeteer.
+description: Browserless X (Twitter) CLI and SDK for AI agents. Use to read timelines, search, fetch tweets by URL, check notifications on demand, and publish tweets/threads/replies without Chrome or Puppeteer.
 ---
 
 # x-use (Agent X Use)
 
-Fast, browserless X (Twitter) automation over pure HTTPS (`api.x.com` + `x.com` GraphQL) with a built-in **2-error safety circuit breaker**.
+Fast, browserless X (Twitter) automation over pure HTTPS (`api.x.com` + `x.com` GraphQL) with a built-in **safety circuit breaker** and **persistent rate limiter**.
 
 ## Authentication & Cookie Security
 
@@ -24,23 +24,28 @@ Optional proxy:
 
 ## Safety Circuit Breaker & Rate Limiter (Mandatory)
 
-- **Persistent Rate Limiter (`~/.x-use/rate_limit.json`):** Every request is logged on disk (`0600`) with an incrementing `eventId` and ISO timestamp — cannot be bypassed across CLI calls.
+- **Persistent Rate Limiter (`~/.x-use/rate_limit.json`):** Every request is logged on disk (`0600`) with an incrementing `eventId` and ISO timestamp.
   - Window caps: max **20 reads / 15m** (`3–6s` jittered gap), max **5 writes / 60m** (`15–30s` jittered gap).
   - If given multiple tasks (e.g., 10 tasks), **execute them discretely with delays**, never in a parallel burst.
-  - Check remaining budget anytime with `xuse limits --json`, or pass `--strict` to fail immediately instead of waiting.
-- **2-Error Circuit Breaker (`~/.x-use/circuit_breaker.json`):** After **2 consecutive errors**, all further requests are blocked.
-- **Agent Halt Rule:** If `--json` returns `"halt": true` (`"circuitBreakerTripped": true` or `"rateLimitExceeded": true`), you MUST **STOP immediately**, NEVER retry or bypass, and report the exact `error` (and `retryAfterSeconds` if present) to the user.
+  - In `--json` or non-TTY mode, `--strict` is active by default so pacing gaps return `pacingWait: true` (`halt: false`, `waitSeconds`) instead of blocking the process.
+  - Check remaining budget anytime with `xuse limits --json`.
+- **Safety Circuit Breaker (`~/.x-use/circuit_breaker.json`):** Trips immediately on `401`/`403`/`429`, or after **2 consecutive errors**, blocking all further requests.
+- **Agent Halt Rule:**
+  - If `--json` returns `"halt": true` (`"circuitBreakerTripped": true` or `"rateLimitExceeded": true`), you MUST **STOP immediately**, NEVER retry or bypass, and report the exact `error` (and `retryAfterSeconds` if present) to the user.
+  - **NEVER** inspect, edit, or delete `~/.x-use/` state files, and **NEVER** attempt to reset the circuit breaker. Only a human user can reset the breaker from an interactive terminal.
+  - **Write Confirmation Rule:** Read operations are safe for autonomous execution; write operations (`tweet`, `reply`, `thread`, `like`, `retweet`, `delete`) MUST only be executed with explicit user confirmation.
   ```bash
   xuse limits --json
   xuse breaker --json
-  xuse reset-breaker --json
   ```
 
 ## Security & Privacy
 
 - **Explicit Credentials Only:** `x-use` never scans or reads browser profile directories. It only uses credentials explicitly supplied by the user (`--cookies`, `X_COOKIES_PATH`, `X_AUTH_TOKEN`+`X_CT0`, or the local `AES-256-GCM` vault `~/.x-use/cookies.vault` unlocked by `X_USE_KEY`).
+- **Security Model Note:** The encrypted vault protects cookies at rest on disk against external readers, not against an agent running in the same environment where `X_USE_KEY` is already exported.
 - **Strict Destination Isolation:** Credentials are only sent to `x.com` and `api.x.com` and are never logged or included in `--json` outputs.
 - **No Background Polling:** Notification checks (`xuse badges`, `xuse notifications`) are strictly on-demand; no background timer loops are started.
+- **Unofficial API Risk:** `x-use` uses X's unofficial web/GraphQL API; excessive or automated usage may still trigger X account restrictions.
 
 ## Agent CLI Commands (Always pass `--json`)
 
@@ -79,7 +84,7 @@ xuse badges --json
 xuse notifications 20 --json
 ```
 
-### Write Actions (Never auto-retried)
+### Write Actions (Require explicit user confirmation; never auto-retried)
 ```bash
 xuse tweet "Hello from x-use" --json
 xuse reply <tweet_id> "Reply text" --json
