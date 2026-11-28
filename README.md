@@ -16,7 +16,7 @@ with a built-in persistent rate limiter and safety circuit breaker. No Chromium,
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20.19.0-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org/)
 [![No Browser](https://img.shields.io/badge/Runtime-Pure%20HTTPS-0A66C2?style=flat-square)](#how-it-works)
 [![Agent Ready](https://img.shields.io/badge/AI%20Agents-JSON%20CLI%20%2B%20SKILL.md-6E56CF?style=flat-square)](SKILL.md)
-[![License: MIT](https://img.shields.io/badge/License-MIT-F59E0B?style=flat-square)](LICENSE)
+[![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-F59E0B?style=flat-square)](LICENSE)
 
 [Quick Start](#quick-start) ·
 [Commands](#commands) ·
@@ -412,4 +412,8 @@ Found a security vulnerability? Please report it privately as described in [`SEC
 
 ## License
 
-[MIT](LICENSE) © dalroot
+[PolyForm Noncommercial 1.0.0](LICENSE) © dalroot — see [`NOTICE`](NOTICE).
+
+- **Personal & open contribution:** Free for personal, research, educational, and noncommercial development; pull requests are welcome.
+- **No commercial use:** Selling, commercial deployment, or paid SaaS hosting is not permitted without written permission.
+- **No rebranding / attribution removal:** Copies and forks must preserve the `Required Notice:` in [`NOTICE`](NOTICE) and may not use the `x-use` name or logo to mislead or rebrand as an original work.
