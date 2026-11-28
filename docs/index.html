@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>X-USE · X for AI Agents</title>
+<meta name="description" content="Browserless X CLI & Node.js SDK for AI agents. JSON output, rate limiter, circuit breaker, encrypted cookie vault." />
+<meta name="theme-color" content="#000000" />
+<link rel="icon" href="logo.svg" type="image/svg+xml" />
+<style>
+  :root {
+    --fg: #e7e9ea; --muted: #a3a9ae; --line: #2f3336; --blue: #1d9bf0;
+    --font: "D-DIN", "DIN Alternate", "Barlow", "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --s: 150px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body { background: #000; color: var(--fg); font-family: var(--font); -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+  a { color: inherit; text-decoration: none; }
+  .up { text-transform: uppercase; letter-spacing: .14em; }
+
+  /* NAV */
+  nav { position: fixed; inset: 0 0 auto 0; z-index: 30; display: flex; justify-content: space-between; align-items: center;
+        padding: 18px 40px; background: #000; border-bottom: 1px solid var(--line); }
+  nav .logo { font-weight: 700; font-size: 20px; letter-spacing: .32em; }
+  nav .links { display: flex; gap: 30px; font-size: 14px; align-items: center; }
+  nav .links a { opacity: .9; transition: opacity .2s; }
+  nav .links a.gh { display: inline-flex; gap: 8px; align-items: center; border: 1px solid var(--fg); padding: 8px 16px; opacity: 1; }
+  nav .links a.gh:hover { background: var(--fg); color: #000; }
+  nav .links a:hover { opacity: 1; }
+
+  /* SECTIONS */
+  section { position: relative; min-height: 100vh; display: flex; align-items: center; padding: 120px 8vw; border-top: 1px solid var(--line); }
+  section[data-side="left"] .content { margin-left: auto; } /* data-side = where the cube sits */
+  .content { width: min(520px, 100%); position: relative; z-index: 2; }
+  .kicker { font-size: 13px; color: var(--muted); margin-bottom: 18px; display: block; }
+  h1 { font-size: clamp(44px, 7.5vw, 104px); font-weight: 700; line-height: .95; letter-spacing: .02em; text-transform: uppercase; }
+  h2 { font-size: clamp(34px, 4.6vw, 60px); font-weight: 700; line-height: 1; text-transform: uppercase; letter-spacing: .03em; margin-bottom: 22px; }
+  p.lead { color: #d9dcde; font-size: 19px; line-height: 1.7; max-width: 480px; }
+  .btn { display: inline-block; border: 2px solid var(--fg); padding: 16px 30px; font-size: 13px; font-weight: 700;
+         text-transform: uppercase; letter-spacing: .16em; position: relative; overflow: hidden; transition: color .35s; cursor: pointer; background: none; color: var(--fg); font-family: var(--font); }
+  .btn::before { content: ""; position: absolute; inset: 0; background: var(--fg); transform: translateY(101%); transition: transform .35s ease; z-index: -1; }
+  .btn:hover { color: #000; }
+  .btn:hover::before { transform: none; }
+  .btn.ghost { border-color: var(--line); }
+  .actions { display: flex; gap: 14px; margin-top: 36px; flex-wrap: wrap; }
+
+  /* HERO */
+  #hero { border-top: none; justify-content: center; text-align: center; overflow: hidden; }
+  #hero .content { width: auto; margin: 0; }
+  #hero h1 { position: relative; z-index: 3; }
+  #hero p.lead { margin: 22px auto 0; }
+  #hero .actions { justify-content: center; }
+  .hero-copy { position: absolute; left: 0; right: 0; bottom: 12vh; z-index: 3; padding: 0 24px; }
+  .scroll-hint { position: absolute; bottom: 28px; left: 50%; transform: translateX(-50%); font-size: 11px; color: var(--muted); }
+  .scroll-hint::after { content: ""; display: block; width: 1px; height: 36px; background: var(--fg); margin: 10px auto 0; animation: drip 1.8s ease-in-out infinite; transform-origin: top; }
+  @keyframes drip { 0% { transform: scaleY(0); } 50% { transform: scaleY(1); } 100% { transform: scaleY(1); opacity: 0; } }
+
+  /* ORBITS */
+  .orbits { position: absolute; left: 50%; top: 42%; width: 0; height: 0; z-index: 1; transition: opacity .5s; }
+  .ring { position: absolute; left: 0; top: 0; width: calc(var(--r) * 2); height: calc(var(--r) * 2); margin: calc(var(--r) * -1) 0 0 calc(var(--r) * -1);
+          border: 1px solid var(--line); border-radius: 50%; animation: spin var(--d) linear infinite; }
+  .ring.rev { animation-direction: reverse; }
+  .sat { position: absolute; left: 50%; top: 50%; width: 0; height: 0; transform: rotate(var(--a)) translateX(var(--r)) rotate(calc(var(--a) * -1)); }
+  .sat > div { position: absolute; width: 46px; height: 46px; margin: -23px 0 0 -23px; border-radius: 50%; background: #000; border: 1px solid rgba(255,255,255,.28);
+               display: grid; place-items: center; animation: spin var(--d) linear infinite reverse; }
+  .ring.rev .sat > div { animation-direction: normal; }
+  .sat img { width: 20px; height: 20px; opacity: .9; }
+  .sat .mono { font-size: 12px; font-weight: 700; letter-spacing: .05em; }
+  .sat > div::after { content: attr(data-name); position: absolute; top: 54px; white-space: nowrap; font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); opacity: 0; transition: opacity .2s; }
+  .sat > div:hover { border-color: var(--fg); }
+  .sat > div:hover::after { opacity: 1; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* CUBE */
+  #stage { position: fixed; left: 0; top: 0; z-index: 2; perspective: 900px; will-change: transform; pointer-events: none; }
+  #cube { position: relative; width: var(--s); height: var(--s); transform-style: preserve-3d; cursor: grab; pointer-events: auto; touch-action: none; }
+  #cube:active { cursor: grabbing; }
+  .face { position: absolute; inset: 0; display: grid; place-items: center; border: 1px solid rgba(231,233,234,.38); border-radius: 6px;
+          background: #000; transition: transform .7s cubic-bezier(.2,.8,.2,1), background .5s, border-color .5s, box-shadow .5s; backface-visibility: visible; }
+  .face svg { width: 58%; height: 58%; }
+  .face .thick { fill: var(--fg); stroke: var(--fg); stroke-width: 0; transition: fill .5s, stroke-width .5s; }
+  .face .thin { stroke: var(--fg); stroke-width: 6.5; fill: none; transition: stroke-width .5s; }
+  #cube { --z: calc(var(--s) / 2); }
+  .f1 { transform: rotateY(0deg) translateZ(var(--z)); }   .f2 { transform: rotateY(90deg) translateZ(var(--z)); }
+  .f3 { transform: rotateY(180deg) translateZ(var(--z)); } .f4 { transform: rotateY(-90deg) translateZ(var(--z)); }
+  .f5 { transform: rotateX(90deg) translateZ(var(--z)); }  .f6 { transform: rotateX(-90deg) translateZ(var(--z)); }
+  /* modes */
+  #cube.wire .face { background: transparent; border-color: rgba(255,255,255,.4); }
+  #cube.wire .face .thick { fill: transparent; stroke-width: 1.6; }
+  #cube.wire .face .thin { stroke-width: 1.6; }
+  #cube.explode { --z: calc(var(--s) * 1.05); }
+  #cube.explode .face { background: rgba(0,0,0,.82); }
+  #cube.pulse .face { border-color: var(--blue); animation: pulse 1.8s ease-in-out infinite; }
+  @keyframes pulse { 50% { box-shadow: 0 0 34px rgba(29,155,240,.45), 0 0 34px rgba(29,155,240,.25) inset; } }
+
+  /* HUD */
+  #hud { position: fixed; left: 40px; bottom: 24px; z-index: 30; background: #000; padding: 6px; display: flex; gap: 6px; align-items: center; font-size: 11px; }
+  #hud span { color: var(--muted); margin-right: 8px; }
+  #hud button { background: none; border: 1px solid var(--line); color: var(--muted); padding: 6px 10px; font: inherit; letter-spacing: .14em; cursor: pointer; transition: all .2s; }
+  #hud button.on, #hud button:hover { color: #000; background: var(--fg); border-color: var(--fg); }
+
+  /* STATS */
+  .stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 36px 28px; margin-top: 40px; }
+  .stat b { display: block; font-size: 64px; font-weight: 700; line-height: 1; }
+  .stat small { font-size: 13px; color: var(--muted); }
+
+  /* LISTS */
+  .steps { margin-top: 30px; border-top: 1px solid var(--line); }
+  .steps li { list-style: none; display: grid; grid-template-columns: 54px 1fr; padding: 18px 0; border-bottom: 1px solid var(--line); }
+  .steps li i { font-style: normal; font-family: var(--mono); color: var(--muted); font-size: 14px; padding-top: 3px; }
+  .steps li b { display: block; font-size: 15px; letter-spacing: .1em; text-transform: uppercase; margin-bottom: 4px; }
+  .steps li span { color: #cfd3d6; font-size: 16px; line-height: 1.6; }
+  code { font-family: var(--mono); font-size: .92em; }
+
+  /* TERMINAL */
+  .term { margin-top: 30px; border: 1px solid var(--line); background: #050505; }
+  .term-tabs { display: flex; border-bottom: 1px solid var(--line); }
+  .term-tabs button { flex: 1; background: none; border: none; border-right: 1px solid var(--line); color: var(--muted); padding: 12px 4px; font: 700 11px var(--font); letter-spacing: .16em; text-transform: uppercase; cursor: pointer; }
+  .term-tabs button:last-child { border-right: none; }
+  .term-tabs button.on { color: #000; background: var(--fg); }
+  .term pre { font-family: var(--mono); font-size: 14px; line-height: 1.9; padding: 20px 22px; overflow-x: auto; color: #d9d9d9; min-height: 228px; }
+  .term pre .c { color: #6f6f6f; }
+  .term .copy { display: block; width: 100%; background: none; border: none; border-top: 1px solid var(--line); color: var(--muted); padding: 12px; font: 700 11px var(--font); letter-spacing: .16em; cursor: pointer; text-transform: uppercase; }
+  .term .copy:hover { color: var(--fg); }
+
+  .repo { display: inline-flex; align-items: center; gap: 10px; margin-top: 26px; padding: 11px 18px; border: 1px solid var(--line); font-family: var(--mono); font-size: 15px; color: var(--fg); background: rgba(0,0,0,.6); transition: border-color .2s; }
+  .repo:hover { border-color: var(--fg); }
+  .repo b { color: #fff; }
+  .prompt { margin-top: 30px; border: 1px solid var(--line); background: #050505; }
+  .prompt header { display: flex; justify-content: space-between; align-items: center; padding: 12px 18px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+  .prompt header button { background: var(--fg); color: #000; border: none; padding: 8px 16px; font: 700 12px var(--font); letter-spacing: .14em; text-transform: uppercase; cursor: pointer; }
+  .prompt pre { font-family: var(--mono); font-size: 13.5px; line-height: 1.75; padding: 20px 22px; white-space: pre-wrap; color: #d9dcde; max-height: 420px; overflow: auto; }
+  .note { margin-top: 28px; padding: 18px 20px; border-left: 2px solid var(--fg); color: #cfd3d6; font-size: 15px; line-height: 1.6; background: rgba(255,255,255,.03); }
+
+  footer { border-top: 1px solid var(--line); padding: 48px 8vw 130px; position: relative; z-index: 3; background: #000; display: flex; justify-content: space-between; gap: 24px; flex-wrap: wrap; font-size: 13px; color: var(--muted); line-height: 1.7; }
+  footer .legal { max-width: 620px; }
+
+  @media (max-width: 860px) {
+    nav { padding: 20px 22px; } nav .links a:not(.gh) { display: none; }
+    section { padding: 110px 24px; }
+    section[data-side] .content { margin: 0 auto; }
+    :root { --s: 110px; }
+    #hud { left: 22px; } #hud span { display: none; }
+    .stat b { font-size: 48px; }
+    #stage.ghost { opacity: .18; } #stage.ghost #cube { pointer-events: none; }
+  }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+
+<nav class="up">
+  <a class="logo" href="#hero">X-USE</a>
+  <div class="links">
+    <a href="#why">Why</a><a href="#safety">Safety</a><a href="#start">Start</a><a href="#agents">Agents</a><a href="#security">Security</a>
+    <a class="gh" href="https://github.com/dalroot/x-use" target="_blank" rel="noopener"><svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg> GitHub</a>
+  </div>
+</nav>
+
+<!-- Interactive X cube -->
+<div id="stage" aria-hidden="true">
+  <div id="cube" title="Drag to rotate · Click to switch mode"></div>
+</div>
+
+<div id="hud" class="up">
+  <span>Drag · Click</span>
+  <button data-mode="solid">Solid</button><button data-mode="wire">Wire</button>
+  <button data-mode="explode">Explode</button><button data-mode="pulse">Pulse</button>
+</div>
+
+<!-- HERO -->
+<section id="hero" data-side="center" data-mode="solid">
+  <div class="orbits" id="orbits"></div>
+  <div class="hero-copy">
+    <h1>X for AI agents</h1>
+    <p class="lead">Browserless X CLI &amp; Node.js SDK. Read, search and publish over plain HTTPS, with safety guards built in.</p>
+    <div class="actions">
+      <a class="btn" href="#start">Get started</a>
+      <a class="btn ghost" href="#agents">Agent prompt</a>
+    </div>
+    <a class="repo" href="https://github.com/dalroot/x-use" target="_blank" rel="noopener"><svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg> github.com/<b>dalroot/x-use</b> ↗</a>
+  </div>
+  <div class="scroll-hint up">Scroll</div>
+</section>
+
+<!-- WHY -->
+<section id="why" data-side="right" data-mode="wire">
+  <div class="content">
+    <span class="kicker up">01 · No browser</span>
+    <h2>Pure HTTPS.<br />Zero Chromium.</h2>
+    <p class="lead">No headless browser, no DOM selectors, no hundreds of MB of RAM. Every command returns predictable JSON that any agent can read.</p>
+    <div class="stats">
+      <div class="stat"><b>0</b><small class="up">Browsers launched</small></div>
+      <div class="stat"><b>1</b><small class="up">Attempt per request</small></div>
+      <div class="stat"><b>2</b><small class="up">Errors → full stop</small></div>
+      <div class="stat"><b>50</b><small class="up">Reads / 15 min max</small></div>
+    </div>
+  </div>
+</section>
+
+<!-- SAFETY -->
+<section id="safety" data-side="left" data-mode="explode">
+  <div class="content">
+    <span class="kicker up">02 · Safety model</span>
+    <h2>Every request.<br />Same pipeline.</h2>
+    <ul class="steps">
+      <li><i>01</i><div><b>Circuit breaker</b><span>Blocks everything after 2 errors, or one 401 / 403 / 429.</span></div></li>
+      <li><i>02</i><div><b>Rate limiter</b><span>50 reads / 15 min, 15 writes / hour, spaced 3–6 s and 15–30 s.</span></div></li>
+      <li><i>03</i><div><b>One attempt</b><span>Single HTTPS call, 35 s timeout. Never retried, never duplicated.</span></div></li>
+      <li><i>04</i><div><b>Clear signal</b><span><code>exit 0</code> ok · <code>exit 4</code> wait &amp; retry once · <code>exit 2/3</code> halt &amp; tell the user.</span></div></li>
+    </ul>
+  </div>
+</section>
+
+<!-- START -->
+<section id="start" data-side="right" data-mode="solid">
+  <div class="content">
+    <span class="kicker up">03 · Quick start</span>
+    <h2>Four commands<br />to launch.</h2>
+    <div class="term">
+      <div class="term-tabs">
+        <button class="on" data-t="install">Install</button><button data-t="read">Read</button>
+        <button data-t="write">Write</button><button data-t="agent">Agent</button>
+      </div>
+      <pre id="term-out"></pre>
+      <button class="copy" id="copy">Copy</button>
+    </div>
+  </div>
+</section>
+
+<!-- AGENTS -->
+<section id="agents" data-side="left" data-mode="wire">
+  <div class="content">
+    <span class="kicker up">04 · For AI agents</span>
+    <h2>One prompt.<br />Fully installed.</h2>
+    <p class="lead">Paste this into Claude Code, Codex, Gemini, Muse or any agent that can run a shell. It installs x-use, loads the skill and never touches your cookies.</p>
+    <div class="prompt">
+      <header><span class="up">Install prompt</span><button id="copy-prompt">Copy prompt</button></header>
+<pre id="agent-prompt">Install the x-use CLI for me and set it up as a skill.
+
+1. Run `node --version`. If it is older than 20.19, stop and tell me.
+2. Install and test:
+   git clone https://github.com/dalroot/x-use.git
+   cd x-use && npm install && npm test && npm link
+3. Copy x-use/SKILL.md into your skills folder
+   (Claude Code: ~/.claude/skills/x-use/SKILL.md), read it fully
+   and follow its rules from now on.
+4. Never ask for, read, print or store my X cookies.
+   Tell me to run this myself in my own terminal:
+     export X_USE_KEY="my-long-passphrase"
+     xuse setup --cookies ./cookies.json --encrypt
+     rm ./cookies.json
+   and to make X_USE_KEY available in your environment.
+5. When I confirm, run `xuse check --json` and
+   `xuse limits --json` and show me the results.
+
+Rules: always use --json. If the output has "halt": true,
+stop and report the exact error. If "pacingWait": true, wait
+waitSeconds and retry once. Never reset the breaker or limits,
+never edit ~/.x-use/, run one command at a time, and ask me
+before any tweet, reply, thread, like, retweet or delete.</pre>
+    </div>
+  </div>
+</section>
+
+<!-- SECURITY -->
+<section id="security" data-side="right" data-mode="pulse">
+  <div class="content">
+    <span class="kicker up">05 · Cookie security</span>
+    <h2>Your session<br />stays yours.</h2>
+    <ul class="steps">
+      <li><i>✓</i><div><b>Encrypted vault</b><span>AES-256-GCM in <code>~/.x-use/</code>, owner-only <code>0600</code>.</span></div></li>
+      <li><i>✓</i><div><b>X domains only</b><span>Cookies go only to <code>x.com</code> and <code>api.x.com</code>. Nothing is logged.</span></div></li>
+      <li><i>✓</i><div><b>Humans reset</b><span>Breaker and limits can only be reset from an interactive terminal.</span></div></li>
+      <li><i>!</i><div><b>Know the limit</b><span>Any process holding <code>X_USE_KEY</code> can decrypt the vault.</span></div></li>
+    </ul>
+    <div class="note"><b>Unofficial tool.</b> x-use uses X's internal web API with your own session cookies. It is not affiliated with X Corp., may break at any time, and automated use can lead to account restrictions. Use a secondary account.</div>
+  </div>
+</section>
+
+<footer>
+  <div><b class="up" style="color:var(--fg);letter-spacing:.3em">X-USE</b><br /><a class="repo" style="margin-top:12px" href="https://github.com/dalroot/x-use" target="_blank" rel="noopener"><svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg> github.com/<b>dalroot/x-use</b></a><br /><span style="display:inline-block;margin-top:12px">© dalroot · <a href="https://github.com/dalroot/x-use/blob/main/LICENSE">License</a></span></div>
+  <div class="legal">X is a trademark of X Corp. Agent names and logos belong to their respective owners and are shown only to indicate compatibility with any agent that can run a shell. No affiliation or endorsement is implied.</div>
+</footer>
+
+<script>
+(() => {
+  const $ = (s, r = document) => r.querySelector(s);
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* ---------- Orbiting agents (Simple Icons CDN, monogram fallback) ---------- */
+  const rings = [
+    { r: 170, d: 38, rev: false, items: [['Claude', 'claude'], ['Codex', 'openai'], ['Gemini', 'googlegemini']] },
+    { r: 255, d: 56, rev: true,  items: [['Meta Muse', 'meta'], ['Cursor', 'cursor'], ['Copilot', 'githubcopilot'], ['Mistral', 'mistralai']] },
+    { r: 345, d: 80, rev: false, items: [['Grok', 'xai'], ['DeepSeek', 'deepseek'], ['Qwen', 'qwen'], ['Windsurf', 'windsurf'], ['Ollama', 'ollama']] }
+  ];
+  const orbits = $('#orbits');
+  rings.forEach(ring => {
+    const el = document.createElement('div');
+    el.className = 'ring' + (ring.rev ? ' rev' : '');
+    el.style.setProperty('--r', ring.r + 'px');
+    el.style.setProperty('--d', ring.d + 's');
+    ring.items.forEach(([name, slug], i) => {
+      const sat = document.createElement('div');
+      sat.className = 'sat';
+      sat.style.setProperty('--a', (360 / ring.items.length) * i + ring.r / 4 + 'deg');
+      const b = document.createElement('div');
+      b.dataset.name = name;
+      const img = new Image();
+      img.alt = name; img.referrerPolicy = 'no-referrer';
+      img.src = `https://cdn.simpleicons.org/${slug}/ffffff`;
+      img.onerror = () => { const m = document.createElement('span'); m.className = 'mono'; m.textContent = name.slice(0, 2).toUpperCase(); img.replaceWith(m); };
+      b.appendChild(img); sat.appendChild(b); el.appendChild(sat);
+    });
+    orbits.appendChild(el);
+  });
+
+  /* ---------- Cube ---------- */
+  const cube = $('#cube'), stage = $('#stage');
+  const X = '<svg viewBox="0 0 100 100"><polygon class="thick" points="14,10 36,10 86,90 64,90"/><path class="thin" d="M86 10 L58 41 M42 59 L14 90"/></svg>';
+  cube.innerHTML = [1, 2, 3, 4, 5, 6].map(i => `<div class="face f${i}">${X}</div>`).join('');
+
+  const modes = ['solid', 'wire', 'explode', 'pulse'];
+  let mode = 'solid', userMode = null, activeSection = null;
+  const setMode = m => {
+    mode = m; cube.className = m === 'solid' ? '' : m;
+    document.querySelectorAll('#hud button').forEach(b => b.classList.toggle('on', b.dataset.mode === m));
+  };
+  document.querySelectorAll('#hud button').forEach(b => b.onclick = () => { userMode = b.dataset.mode; setMode(userMode); });
+
+  // drag + inertia, click to cycle
+  let rx = -18, ry = 32, vx = 0, vy = 0.18, dragging = false, moved = 0, lx = 0, ly = 0;
+  cube.addEventListener('pointerdown', e => { dragging = true; moved = 0; lx = e.clientX; ly = e.clientY; cube.setPointerCapture(e.pointerId); });
+  cube.addEventListener('pointermove', e => {
+    if (!dragging) return;
+    const dx = e.clientX - lx, dy = e.clientY - ly; lx = e.clientX; ly = e.clientY;
+    moved += Math.abs(dx) + Math.abs(dy);
+    vy = dx * 0.35; vx = -dy * 0.35; ry += vy; rx += vx;
+  });
+  cube.addEventListener('pointerup', () => {
+    dragging = false;
+    if (moved < 6) { userMode = modes[(modes.indexOf(mode) + 1) % modes.length]; setMode(userMode); }
+  });
+
+  // position: follows the active section's side, smoothed every frame
+  const sections = [...document.querySelectorAll('section')];
+  const foot = document.querySelector('footer');
+  let px = innerWidth / 2, py = innerHeight * 0.42, ps = 1;
+  const target = () => {
+    const vh = innerHeight, vw = innerWidth, mobile = vw < 860;
+    const sec = sections.find(s => { const r = s.getBoundingClientRect(); return r.top <= vh * 0.5 && r.bottom > vh * 0.5; }) || sections[sections.length - 1];
+    if (sec !== activeSection) { activeSection = sec; userMode = null; setMode(sec.dataset.mode); }
+    stage.classList.toggle('ghost', mobile && sec.id !== 'hero');
+    const side = sec.dataset.side;
+    const x = side === 'center' || mobile ? vw / 2 : side === 'right' ? vw * 0.72 : vw * 0.28;
+    const y = side === 'center' ? vh * 0.42 : vh * 0.5;
+    const s = side === 'center' ? 1 : mobile ? 1.1 : 1.35;
+    const footTop = foot.getBoundingClientRect().top;
+    const maxY = footTop - (cube.offsetWidth / 2) * s * 1.6 - 24;
+    return { x, y: Math.min(y, maxY), s };
+  };
+
+  const tick = () => {
+    const t = target();
+    px += (t.x - px) * 0.08; py += (t.y - py) * 0.08; ps += (t.s - ps) * 0.08;
+    if (!dragging) { vx *= 0.94; vy = vy * 0.94 + (reduce ? 0 : 0.012); rx += vx; ry += vy; }
+    const scrollSpin = scrollY * 0.12;
+    const half = cube.offsetWidth / 2;
+    stage.style.transform = `translate3d(${px - half}px, ${py - half}px, 0) scale(${ps})`;
+    cube.style.transform = `rotateX(${rx + scrollSpin * 0.4}deg) rotateY(${ry + scrollSpin}deg)`;
+    orbits.style.opacity = Math.max(0, 1 - scrollY / (innerHeight * 0.6));
+    requestAnimationFrame(tick);
+  };
+  const fitOrbits = () => { orbits.style.transform = `scale(${Math.min(1, innerHeight / 980, innerWidth / 820)})`; };
+  addEventListener('resize', fitOrbits); fitOrbits();
+  setMode('solid');
+  requestAnimationFrame(tick);
+
+  /* ---------- Terminal tabs ---------- */
+  const snippets = {
+    install: `<span class="c"># Install</span>
+git clone https://github.com/dalroot/x-use.git
+cd x-use && npm install && npm link
+<span class="c"># Encrypted cookie vault</span>
+export X_USE_KEY="long-random-passphrase"
+xuse setup --cookies ./cookies.json --encrypt
+xuse check --json`,
+    read: `xuse profile &lt;user&gt; --json
+xuse tweets &lt;user&gt; 20 --json
+xuse search "AI agents" 20 --json
+xuse read https://x.com/user/status/123 --json
+xuse badges --json      <span class="c"># before notifications</span>
+xuse limits --json      <span class="c"># remaining budget</span>`,
+    write: `<span class="c"># Agents must ask the user first</span>
+xuse tweet "Hello from x-use" --json
+xuse reply &lt;id&gt; "Nice!" --json
+xuse thread ./thread.json --json
+xuse like &lt;id&gt; --json
+xuse delete &lt;id&gt; --json`,
+    agent: `<span class="c"># Drop SKILL.md into your agent's skills folder</span>
+exit 0  →  ok: true, read data
+exit 4  →  pacingWait: wait waitSeconds, retry once
+exit 2  →  rate limit: STOP, tell the user
+exit 3  →  breaker: STOP, tell the user
+<span class="c"># Never reset, never run tasks in parallel</span>`
+  };
+  const out = $('#term-out');
+  const show = k => { out.innerHTML = snippets[k]; document.querySelectorAll('.term-tabs button').forEach(b => b.classList.toggle('on', b.dataset.t === k)); };
+  document.querySelectorAll('.term-tabs button').forEach(b => b.onclick = () => show(b.dataset.t));
+  show('install');
+  $('#copy-prompt').onclick = e => {
+    navigator.clipboard?.writeText($('#agent-prompt').innerText).then(() => { e.target.textContent = 'Copied ✓'; setTimeout(() => e.target.textContent = 'Copy prompt', 1500); });
+  };
+  $('#copy').onclick = e => {
+    navigator.clipboard?.writeText(out.innerText).then(() => { e.target.textContent = 'Copied ✓'; setTimeout(() => e.target.textContent = 'Copy', 1500); });
+  };
+})();
+</script>
+</body>
+</html>
