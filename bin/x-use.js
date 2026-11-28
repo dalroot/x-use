@@ -23,7 +23,13 @@ Commands:
   like <tweetId>            Like/favorite a tweet
   retweet <tweetId>         Retweet a tweet
   tweets <username> [n]     Fetch recent tweets for a user
+  reposts <username> [n]    Fetch recent reposts for a user
   search <query> [n]        Search tweets
+  home [n]                  Fetch Home timeline
+  explore [n]               Fetch Explore timeline
+  read <tweetId>            Fetch a single tweet by ID
+  notifications [n]         Fetch notifications
+  suggest <query>           Search typeahead suggestions
 
 Options:
   --cookies <path>          Path to cookies JSON file (or set X_COOKIES_PATH)
@@ -227,9 +233,30 @@ async function runInteractiveMenu(baseFlags) {
         if (!args[0]) throw new Error('Missing <username>');
         result = await client.getUserTweets(args[0], Number(args[1]) || 20);
         break;
+      case 'reposts':
+        if (!args[0]) throw new Error('Missing <username>');
+        result = await client.getUserReposts(args[0], Number(args[1]) || 20);
+        break;
       case 'search':
         if (!args[0]) throw new Error('Missing <query>');
         result = await client.searchTweets(args[0], Number(args[1]) || 20);
+        break;
+      case 'home':
+        result = await client.getHomeTimeline(Number(args[0]) || 20);
+        break;
+      case 'explore':
+        result = await client.getExplore(Number(args[0]) || 20);
+        break;
+      case 'read':
+        if (!args[0]) throw new Error('Missing <tweetId>');
+        result = await client.getTweet(args[0]);
+        break;
+      case 'notifications':
+        result = await client.getNotifications(Number(args[0]) || 40);
+        break;
+      case 'suggest':
+        if (!args[0]) throw new Error('Missing <query>');
+        result = await client.searchTypeahead(args.join(' '));
         break;
       default:
         throw new Error(`Unknown command: ${command}`);

@@ -52,12 +52,14 @@ function createProxyAgent(rawProxy) {
 
 /**
  * Perform a raw HTTPS request over Node's built-in https module.
- * Retries transient network failures (e.g. flaky tunnel dropping the
- * socket with "Socket closed") up to 5 times before giving up,
- * matching the Python side's 5-attempt retry on the same tunnel.
- * Only network errors are retried; HTTP error statuses resolve normally.
+ * Retries transient network failures up to 2 times for idempotent GET requests
+ * to avoid duplicate writes or triggering anti-automation rate limits.
+ * HTTP error statuses resolve normally without retrying.
  */
 function httpRequest(options, postData = null, agent = null, attempt = 1) {
+  const isGet = (options.method || 'GET').toUpperCase() === 'GET';
+  const maxAttempts = isGet ? 3 : 1;
+
   return new Promise((resolve, reject) => {
     const reqOpts = {
       ...options,
@@ -75,7 +77,7 @@ function httpRequest(options, postData = null, agent = null, attempt = 1) {
       });
     });
     req.on('error', (err) => {
-      if (attempt < 5) {
+      if (attempt < maxAttempts) {
         setTimeout(() => {
           httpRequest(options, postData, agent, attempt + 1).then(resolve, reject);
         }, 2000 * attempt);
