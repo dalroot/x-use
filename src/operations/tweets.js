@@ -26,7 +26,8 @@ async function createTweet(client, text, options = {}) {
     queryId
   });
 
-  const res = await client._postGraphQL(apiPath, headers, payload, 'CreateTweet');
+  const reqOpts = options.strict !== undefined ? { strict: options.strict } : {};
+  const res = await client._postGraphQL(apiPath, headers, payload, 'CreateTweet', reqOpts);
   const data = await client._parseGraphQL(res, 'createTweet');
   const tweetResult = data.data?.create_tweet?.tweet_results?.result || data.data?.create_tweet || {};
   const tweetId =
@@ -54,11 +55,11 @@ async function replyTweet(client, tweetId, text, options = {}) {
   return createTweet(client, text, {
     ...options,
     variables: {
+      ...options.variables,
       reply: {
         in_reply_to_tweet_id: String(tweetId),
         exclude_reply_user_ids: []
-      },
-      ...options.variables
+      }
     }
   });
 }
@@ -83,19 +84,15 @@ async function postThread(client, tweets, delayMs = 0) {
 
   const published = [];
   let parentId = null;
-  const hasLimiter = Boolean(client.rateLimiter);
-  const originalStrict = hasLimiter ? client.rateLimiter.strict : false;
 
   try {
     for (let i = 0; i < tweets.length; i++) {
       // Honor strict mode before tweet #1, then let RateLimiter sleep 15-30s between tweets #2..N
-      // so a confirmed thread never aborts mid-way due to PACING_WAIT_REQUIRED.
-      if (i > 0 && hasLimiter) {
-        client.rateLimiter.strict = false;
-      }
+      // via per-request options (without mutating shared rateLimiter.strict).
+      const perTweetOpts = i > 0 ? { strict: false } : {};
       const res = parentId
-        ? await replyTweet(client, parentId, tweets[i])
-        : await createTweet(client, tweets[i]);
+        ? await replyTweet(client, parentId, tweets[i], perTweetOpts)
+        : await createTweet(client, tweets[i], perTweetOpts);
       published.push(res);
       parentId = res.tweetId;
       if (i < tweets.length - 1 && delayMs > 0) {
@@ -105,10 +102,6 @@ async function postThread(client, tweets, delayMs = 0) {
   } catch (err) {
     err.published = published;
     throw err;
-  } finally {
-    if (hasLimiter) {
-      client.rateLimiter.strict = originalStrict;
-    }
   }
   return published;
 }

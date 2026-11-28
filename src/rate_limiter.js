@@ -13,7 +13,7 @@ const MAX_READ_GAP_MS = 6000;
 const MIN_WRITE_GAP_MS = 15000;
 const MAX_WRITE_GAP_MS = 30000;
 const LOCK_STALE_MS = 30000;
-const CLOCK_ROLLBACK_TOLERANCE_MS = 2 * 60 * 1000; // 2 minutes NTP skew tolerance
+const CLOCK_ROLLBACK_TOLERANCE_MS = 2 * 60 * 1000; // 2 minutes local clock-rollback tolerance
 
 const inProcessQueues = new Map();
 
@@ -266,6 +266,7 @@ class RateLimiter {
     const maxAllowed = kind === 'read' ? this.maxReads : this.maxWrites;
     const bypassPacing = Boolean(acquireOpts.bypassPacing);
     const isInit = Boolean(acquireOpts.isInit);
+    const isStrict = acquireOpts.strict !== undefined ? Boolean(acquireOpts.strict) : this.strict;
     let totalWaitedMs = 0;
 
     while (true) {
@@ -303,7 +304,7 @@ class RateLimiter {
           const elapsed = now - lastSame.tsMs;
           if (elapsed < targetGap) {
             const waitNeeded = targetGap - elapsed;
-            if (this.strict) {
+            if (isStrict) {
               const waitSeconds = Math.max(1, Math.ceil(waitNeeded / 1000));
               throw this._createRateError(
                 `Pacing guard: ${kind} called ${elapsed}ms after event #${lastSame.eventId} (${lastSame.timestamp}). ` +

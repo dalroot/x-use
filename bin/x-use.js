@@ -40,8 +40,9 @@ Commands:
   badges                    Check lightweight unread badge counts
   suggest <query>           Search typeahead suggestions
   breaker                   Show 2-error safety circuit breaker status
-  reset-breaker             Reset tripped safety circuit breaker
+  reset-breaker             Reset tripped safety circuit breaker (TTY only)
   limits                    Show persistent rate-limit ledger & last eventId
+  reset-limits              Reset rate-limit window counters & cooldown (TTY only)
 
 Options:
   --cookies <path>          Path to cookies JSON file (or set X_COOKIES_PATH)

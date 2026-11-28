@@ -218,7 +218,7 @@ test('RateLimiter enforces strict pacing (waitSeconds, halt: false), window cap,
     (err) => err.code === 'RATE_LIMIT_EXCEEDED' && err.halt === true
   );
 
-  // Clock rollback within 2m NTP tolerance is allowed; >2m halts
+  // Clock rollback within 2m local tolerance is allowed; >2m halts
   fs.writeFileSync(
     rlPath,
     JSON.stringify({ lastEventId: 5, lastTsMs: Date.now() + 60000, cooldownUntilMs: 0, events: [] })
@@ -767,6 +767,82 @@ https.request = (opts, cb) => {
   assert.ok(ledgerOnDisk.cooldownUntilMs > Date.now() + 90000);
   assert.ok(pProfile.code === 0 || pProfile.code === 2 || pProfile.code === 3);
   fs.rmSync(rl429Home, { recursive: true, force: true });
+
+  // 13. Merge-hardening checks: HttpConnectAgent CONNECT timeout, replyTweet reply integrity,
+  //     atomic vault write perms, bounded parseGraphQLResponse error preview, and CLI --help reset-limits
+  const { parseGraphQLResponse } = require('../src/transport');
+  const http = require('http');
+  const origFetch = globalThis.fetch;
+  const origHttpReq = http.request;
+  try {
+    const { agent } = createProxyAgent('http://127.0.0.1:19999');
+    http.request = () => {
+      const req = new EventEmitter();
+      req.setTimeout = (_ms, fn) => {
+        if (fn) process.nextTick(fn);
+      };
+      req.destroy = (err) => req.emit('error', err);
+      req.end = () => {};
+      return req;
+    };
+    await assert.rejects(
+      () =>
+        new Promise((resolve, reject) => {
+          agent.createConnection({ host: 'x.com', port: 443 }, (err, sock) => (err ? reject(err) : resolve(sock)));
+        }),
+      /HTTP proxy CONNECT timeout/
+    );
+  } finally {
+    http.request = origHttpReq;
+    globalThis.fetch = origFetch;
+  }
+
+  const bigHtml = 'x'.repeat(1200);
+  assert.throws(
+    () => parseGraphQLResponse({ statusCode: 502, body: bigHtml, headers: {} }, 'bigErr'),
+    (err) => err.statusCode === 502 && err.message.includes('...[truncated]') && err.message.length < 700
+  );
+
+  const vaultDir = makeTempDir();
+  const cJson = path.join(vaultDir, 'c.json');
+  const vPath = path.join(vaultDir, 'cookies.vault');
+  fs.writeFileSync(cJson, JSON.stringify([{ name: 'auth_token', value: 'a' }, { name: 'ct0', value: 'b' }]));
+  encryptCookiesVault(cJson, 'pass-1234', vPath);
+  assert.equal(fs.statSync(vPath).mode & 0o777, 0o600);
+  assert.equal(fs.readdirSync(vaultDir).some((f) => f.includes('.tmp.')), false);
+  fs.rmSync(vaultDir, { recursive: true, force: true });
+
+  const replyClient = new XUseClient({
+    authToken: 'FAKE123',
+    ct0: 'FAKECT0',
+    proxyUrl: '',
+    breakerPath: path.join(dir, 'cb_reply.json'),
+    rateLimitPath: path.join(dir, 'rl_reply.json')
+  });
+  let capturedReplyVars = null;
+  await withMockHttps(
+    (opts) => {
+      if (opts.path === '/home') return { statusCode: 200, body: '<html></html>' };
+      return {
+        statusCode: 200,
+        body: JSON.stringify({ data: { create_tweet: { tweet_results: { result: { rest_id: '999', legacy: { full_text: 'ok' } } } } } })
+      };
+    },
+    async () => {
+      // Intercept _postGraphQL payload cleanly to inspect variables without touching mock helper
+      const origPost = replyClient._postGraphQL.bind(replyClient);
+      replyClient._postGraphQL = async (apiPath, headers, payload, opName, reqOpts) => {
+        capturedReplyVars = JSON.parse(payload).variables;
+        return origPost(apiPath, headers, payload, opName, reqOpts);
+      };
+      await replyClient.replyTweet('123456', 'hi', { variables: { reply: { in_reply_to_tweet_id: 'EVIL' } } });
+      assert.equal(capturedReplyVars.reply.in_reply_to_tweet_id, '123456');
+    }
+  );
+
+  const helpRes = spawnSync(process.execPath, [cliPath, '--help'], { encoding: 'utf8' });
+  assert.equal(helpRes.status, 0);
+  assert.match(helpRes.stdout, /reset-limits/);
 
   fs.rmSync(dir, { recursive: true, force: true });
 });

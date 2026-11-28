@@ -20,16 +20,27 @@ function loadSavedConfig() {
 }
 
 /**
+ * Atomically write a sensitive file with owner-only (0600) permissions.
+ */
+function _writePrivateFile(targetPath, contents) {
+  const dir = path.dirname(targetPath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
+  const tmpPath = `${targetPath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
+  fs.writeFileSync(tmpPath, contents, { mode: 0o600 });
+  fs.chmodSync(tmpPath, 0o600);
+  fs.renameSync(tmpPath, targetPath);
+  return targetPath;
+}
+
+/**
  * Persist user configuration to ~/.x-use/config.json with owner-only permissions.
  */
 function saveConfig(newConfig) {
   const current = loadSavedConfig();
   const merged = { ...current, ...newConfig };
-  if (!fs.existsSync(CONFIG_DIR)) {
-    fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
-  }
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(merged, null, 2), { mode: 0o600 });
-  return CONFIG_PATH;
+  return _writePrivateFile(CONFIG_PATH, JSON.stringify(merged, null, 2));
 }
 
 function isAllowedXDomain(domain) {
@@ -115,10 +126,6 @@ function encryptCookiesVault(cookiesPath, passphrase, vaultPath = VAULT_PATH) {
   const encrypted = Buffer.concat([cipher.update(raw, 'utf8'), cipher.final()]);
   const tag = cipher.getAuthTag();
 
-  const dir = path.dirname(vaultPath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  }
   const payload = JSON.stringify({
     alg: 'aes-256-gcm',
     salt: salt.toString('hex'),
@@ -126,8 +133,7 @@ function encryptCookiesVault(cookiesPath, passphrase, vaultPath = VAULT_PATH) {
     tag: tag.toString('hex'),
     data: encrypted.toString('hex')
   });
-  fs.writeFileSync(vaultPath, payload, { mode: 0o600 });
-  return vaultPath;
+  return _writePrivateFile(vaultPath, payload);
 }
 
 /**

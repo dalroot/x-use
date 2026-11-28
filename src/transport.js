@@ -29,6 +29,7 @@ class HttpConnectAgent extends https.Agent {
     });
 
     req.once('connect', (res, socket) => {
+      req.setTimeout(0);
       if (res.statusCode !== 200) {
         socket.destroy();
         return cb(new Error(`HTTP proxy CONNECT failed with status ${res.statusCode}`));
@@ -41,6 +42,7 @@ class HttpConnectAgent extends https.Agent {
     });
 
     req.once('error', (err) => cb(err));
+    req.setTimeout(35000, () => req.destroy(new Error('HTTP proxy CONNECT timeout')));
     req.end();
     return undefined;
   }
@@ -76,16 +78,21 @@ function createProxyAgent(rawProxy) {
 
   globalThis.fetch = function (url, opts = {}) {
     return new Promise((resolve, reject) => {
+      if (opts.signal?.aborted) {
+        return reject(new Error('The operation was aborted.'));
+      }
       const u = new URL(url);
+      const isHttp = u.protocol === 'http:';
+      const transportMod = isHttp && !agent ? http : https;
       const reqOpts = {
         hostname: u.hostname,
-        port: u.port || 443,
+        port: u.port || (isHttp ? 80 : 443),
         path: u.pathname + u.search,
         method: opts.method || 'GET',
         headers: opts.headers || {},
         agent
       };
-      const req = https.request(reqOpts, (res) => {
+      const req = transportMod.request(reqOpts, (res) => {
         const chunks = [];
         res.on('data', (c) => chunks.push(c));
         res.on('end', () => {
@@ -100,6 +107,11 @@ function createProxyAgent(rawProxy) {
           });
         });
       });
+      if (opts.signal) {
+        opts.signal.addEventListener('abort', () => req.destroy(new Error('The operation was aborted.')), {
+          once: true
+        });
+      }
       req.on('error', reject);
       if (opts.body) req.write(opts.body);
       req.end();
@@ -173,7 +185,9 @@ function httpRequest(options, postData = null, agent = null) {
  */
 function parseGraphQLResponse(res, actionName) {
   if (res.statusCode !== 200) {
-    const err = new Error(`${actionName} failed with status ${res.statusCode}: ${res.body}`);
+    const rawBody = String(res.body || '');
+    const preview = rawBody.length > 500 ? `${rawBody.slice(0, 500)}...[truncated]` : rawBody;
+    const err = new Error(`${actionName} failed with status ${res.statusCode}: ${preview}`);
     err.statusCode = res.statusCode;
     err.headers = res.headers || {};
     throw err;

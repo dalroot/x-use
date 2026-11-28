@@ -80,7 +80,8 @@ class XUseClient {
     const opName = options.operationName || String(options.path || '').split('/').pop().split('?')[0] || options.method || 'GET';
     this.lastEvent = await this.rateLimiter.acquire(options.method || 'GET', opName, {
       isInit: Boolean(options.isInit),
-      bypassPacing: Boolean(options.bypassPacing)
+      bypassPacing: Boolean(options.bypassPacing),
+      ...(options.strict !== undefined ? { strict: options.strict } : {})
     });
     // Re-check circuit breaker immediately before network dispatch in case another request
     // or process tripped the breaker while we waited in rateLimiter.acquire().
@@ -123,13 +124,14 @@ class XUseClient {
     });
   }
 
-  async _postGraphQL(apiPath, headers, payload, operationName = '') {
+  async _postGraphQL(apiPath, headers, payload, operationName = '', reqOpts = {}) {
     const res = await this._httpRequest(
       {
         hostname: 'x.com',
         path: apiPath,
         method: 'POST',
         operationName,
+        ...(reqOpts.strict !== undefined ? { strict: reqOpts.strict } : {}),
         headers: {
           ...headers,
           'content-length': Buffer.byteLength(payload)
