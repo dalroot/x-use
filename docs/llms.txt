@@ -1,0 +1,26 @@
+# x-use
+
+> Browserless X (Twitter) CLI & Node.js SDK built to connect AI agents (Claude Code, Codex, Gemini, Cursor, Muse, OpenClaw, and custom LLM agents) to X over pure HTTPS—with an encrypted cookie vault, persistent rate limiter, and circuit breaker.
+
+## Overview
+
+`x-use` (`xuse` / `agent-x-use`) lets AI agents read timelines, search posts, fetch profiles and notifications, and publish tweets, replies, threads, likes, and retweets without launching Chromium, Puppeteer, or Playwright.
+
+- **Website:** https://dalroot.github.io/x-use/
+- **Repository:** https://github.com/dalroot/x-use
+- **Runtime:** Node.js `>=20.19.0` (Pure HTTPS + X GraphQL + `x-client-transaction-id`)
+- **License:** PolyForm Noncommercial License 1.0.0
+
+## Documentation for Agents
+
+- [SKILL.md](https://raw.githubusercontent.com/dalroot/x-use/main/SKILL.md): Complete operational rules, CLI commands, JSON output schema, and exit codes (`0`, `1`, `2`, `3`, `4`) for AI agents.
+- [AGENTS.md](https://raw.githubusercontent.com/dalroot/x-use/main/AGENTS.md): Repository and safety rules for coding and CLI agents.
+- [README.md](https://raw.githubusercontent.com/dalroot/x-use/main/README.md): Installation, Node.js SDK usage, proxy support, and cookie security guide.
+
+## Safety & Anti-Ban Architecture
+
+- **1 Attempt Per Request:** Single HTTPS request with 35s timeout; no blind retry loops.
+- **Persistent Rate Limiter:** Default 50 reads per 15 minutes (3–6s jitter) and 15 writes per 60 minutes (15–30s jitter).
+- **Circuit Breaker:** Trips after 2 consecutive errors or immediately on HTTP `401`, `403`, or `429`.
+- **Encrypted Cookie Vault:** AES-256-GCM encrypted credentials stored in `~/.x-use/` with `0600` permissions.
+- **Human Confirmation Required:** Agents must always ask the user before executing write actions (`tweet`, `reply`, `thread`, `like`, `retweet`, `delete`).
