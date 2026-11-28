@@ -1,6 +1,6 @@
 const { parseHTML } = require('linkedom');
 const { ClientTransaction } = require('x-client-transaction-id');
-const { BEARER_TOKEN, DEFAULT_USER_AGENT, DEFAULT_QUERY_IDS } = require('./constants');
+const { BEARER_TOKEN, API_X_HOST, DEFAULT_USER_AGENT, DEFAULT_QUERY_IDS } = require('./constants');
 const { resolveCredentials, loadSavedConfig } = require('./auth');
 const { createProxyAgent, httpRequest, parseGraphQLResponse } = require('./transport');
 const tweetsOps = require('./operations/tweets');
@@ -68,6 +68,15 @@ class XUseClient {
   _getGraphQL(fullPath, headers) {
     return this._httpRequest({
       hostname: 'x.com',
+      path: fullPath,
+      method: 'GET',
+      headers
+    });
+  }
+
+  _getApiGraphQL(fullPath, headers) {
+    return this._httpRequest({
+      hostname: API_X_HOST,
       path: fullPath,
       method: 'GET',
       headers
@@ -151,6 +160,8 @@ class XUseClient {
       authorization: this.bearerToken,
       'x-csrf-token': this.ct0,
       cookie: this.cookieHeader,
+      origin: 'https://x.com',
+      referer: 'https://x.com/',
       'x-twitter-active-user': 'yes',
       'x-twitter-auth-type': 'OAuth2Session',
       'x-twitter-client-language': 'en',
@@ -168,12 +179,36 @@ class XUseClient {
     return usersOps.getProfile(this, screenName);
   }
 
-  getUserTweets(screenNameOrUserId, count = 20) {
-    return usersOps.getUserTweets(this, screenNameOrUserId, count);
+  getUserTweets(screenName, count = 20, cursor = null) {
+    return usersOps.getUserTweets(this, screenName, count, cursor);
   }
 
-  searchTweets(query, count = 20, product = 'Latest') {
-    return usersOps.searchTweets(this, query, count, product);
+  getUserReposts(screenName, count = 20, cursor = null) {
+    return usersOps.getUserReposts(this, screenName, count, cursor);
+  }
+
+  searchTweets(query, count = 20, product = 'Latest', cursor = null) {
+    return usersOps.searchTweets(this, query, count, product, cursor);
+  }
+
+  getHomeTimeline(count = 20, cursor = null) {
+    return usersOps.getHomeTimeline(this, count, cursor);
+  }
+
+  getExplore(count = 20, cursor = null, timelineId = null) {
+    return usersOps.getExplore(this, count, cursor, timelineId);
+  }
+
+  getTweet(tweetId) {
+    return usersOps.getTweet(this, tweetId);
+  }
+
+  getNotifications(count = 40, timelineType = 'All', cursor = null) {
+    return usersOps.getNotifications(this, count, timelineType, cursor);
+  }
+
+  searchTypeahead(query) {
+    return usersOps.searchTypeahead(this, query);
   }
 
   createTweet(text, options = {}) {
