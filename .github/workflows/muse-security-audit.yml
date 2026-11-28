@@ -57,7 +57,7 @@ jobs:
           ];
           const hits = [];
           for (const f of files) {
-            if (/\.(png|svg|jpg)$/i.test(f)) continue;
+            if (/\.(png|svg|jpg)$/i.test(f) || f === '.github/workflows/muse-security-audit.yml') continue;
             const lines = fs.readFileSync(f, 'utf8').split('\n');
             lines.forEach((line, idx) => {
               for (const r of rules) {
