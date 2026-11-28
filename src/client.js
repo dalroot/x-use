@@ -82,10 +82,24 @@ class XUseClient {
       isInit: Boolean(options.isInit),
       bypassPacing: Boolean(options.bypassPacing)
     });
+    // Re-check circuit breaker immediately before network dispatch in case another request
+    // or process tripped the breaker while we waited in rateLimiter.acquire().
+    this.circuitBreaker.assertReady();
+
+    const isWriteMethod = String(options.method || 'GET').toUpperCase() !== 'GET';
     try {
       return await httpRequest(options, postData, this.agent);
     } catch (err) {
-      this._recordFailureWithStatus(err, null, null);
+      if (isWriteMethod) {
+        const writeErr = new Error(
+          `Write request interrupted before complete response (${err.message}). Status is unknown — STOP and verify manually on X before repeating.`
+        );
+        writeErr.code = 'AMBIGUOUS_WRITE_RESULT';
+        writeErr.halt = true;
+        writeErr.ambiguousWrite = true;
+        await this._recordFailureWithStatus(writeErr, null, null);
+      }
+      await this._recordFailureWithStatus(err, null, null);
     }
   }
 
@@ -109,8 +123,8 @@ class XUseClient {
     });
   }
 
-  _postGraphQL(apiPath, headers, payload, operationName = '') {
-    return this._httpRequest(
+  async _postGraphQL(apiPath, headers, payload, operationName = '') {
+    const res = await this._httpRequest(
       {
         hostname: 'x.com',
         path: apiPath,
@@ -123,6 +137,10 @@ class XUseClient {
       },
       payload
     );
+    if (res && typeof res === 'object') {
+      res.isWrite = true;
+    }
+    return res;
   }
 
   _isSensitiveGraphQLError(err) {
@@ -135,9 +153,10 @@ class XUseClient {
     );
   }
 
-  _recordFailureWithStatus(err, status, headers) {
+  async _recordFailureWithStatus(err, status, headers) {
     const isImmediate =
       status === 401 || status === 403 || status === 429 || this._isSensitiveGraphQLError(err);
+    const state = this.circuitBreaker.recordFailure(err.message, { immediate: isImmediate });
     if (status === 429 && headers) {
       const retryAfter = Number(headers['retry-after']);
       const resetAt = Number(headers['x-rate-limit-reset']);
@@ -147,9 +166,14 @@ class XUseClient {
       } else if (Number.isFinite(resetAt) && resetAt > 0) {
         cooldownSec = Math.max(1, resetAt - Math.floor(Date.now() / 1000));
       }
-      this.rateLimiter.recordCooldownSync(cooldownSec);
+      await this.rateLimiter.recordCooldown(cooldownSec);
     }
-    const state = this.circuitBreaker.recordFailure(err.message, { immediate: isImmediate });
+    if (err.code === 'AMBIGUOUS_WRITE_RESULT') {
+      err.halt = true;
+      err.ambiguousWrite = true;
+      if (state.tripped) err.circuitBreakerTripped = true;
+      throw err;
+    }
     if (state.tripped) {
       const trippedErr = new Error(
         `${err.message} | SAFETY CIRCUIT BREAKER TRIPPED (${state.consecutiveErrors} consecutive errors). STOP and notify the user.`
@@ -162,13 +186,22 @@ class XUseClient {
     throw err;
   }
 
-  _parseGraphQL(res, actionName) {
+  async _parseGraphQL(res, actionName) {
     try {
       const parsed = parseGraphQLResponse(res, actionName);
       this.circuitBreaker.recordSuccess();
       return parsed;
     } catch (err) {
-      this._recordFailureWithStatus(err, res?.statusCode, res?.headers);
+      let failureErr = err;
+      if (res?.isWrite && (err instanceof SyntaxError || Number(res.statusCode) >= 500)) {
+        failureErr = new Error(
+          `Write response incomplete or ambiguous (${err.message}). Status is unknown — STOP and verify manually on X before repeating.`
+        );
+        failureErr.code = 'AMBIGUOUS_WRITE_RESULT';
+        failureErr.halt = true;
+        failureErr.ambiguousWrite = true;
+      }
+      await this._recordFailureWithStatus(failureErr, res?.statusCode, res?.headers);
     }
   }
 
@@ -236,7 +269,7 @@ class XUseClient {
 
     if (resHome.statusCode !== 200) {
       const initErr = new Error(`Failed to load x.com shell: status ${resHome.statusCode}`);
-      this._recordFailureWithStatus(initErr, resHome.statusCode, resHome.headers);
+      await this._recordFailureWithStatus(initErr, resHome.statusCode, resHome.headers);
     }
 
     try {

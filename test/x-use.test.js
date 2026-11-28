@@ -53,10 +53,10 @@ test('XUseClient trips breaker after 2 failed GraphQL responses and immediately 
     rateLimitPath: path.join(dir, 'rl.json')
   });
 
-  assert.throws(() => client._parseGraphQL({ statusCode: 404, body: 'Not Found' }, 'op1'), /status 404/);
+  await assert.rejects(() => client._parseGraphQL({ statusCode: 404, body: 'Not Found' }, 'op1'), /status 404/);
   assert.equal(client.getCircuitBreakerStatus().tripped, false);
 
-  assert.throws(() => client._parseGraphQL({ statusCode: 500, body: 'Server Error' }, 'op2'), /CIRCUIT BREAKER TRIPPED/);
+  await assert.rejects(() => client._parseGraphQL({ statusCode: 500, body: 'Server Error' }, 'op2'), /CIRCUIT BREAKER TRIPPED/);
   assert.equal(client.getCircuitBreakerStatus().tripped, true);
 
   await assert.rejects(() => client._httpRequest({ hostname: 'api.x.com', path: '/' }), /TRIPPED/);
@@ -69,20 +69,20 @@ test('XUseClient trips breaker after 2 failed GraphQL responses and immediately 
   client.resetCircuitBreaker();
   assert.equal(client.getCircuitBreakerStatus().tripped, false);
 
-  // Immediate trip on 403 & 429 + synchronous cooldown persistence + 200 GraphQL account lock
-  assert.throws(
+  // Immediate trip on 403 & 429 + async locked cooldown persistence + 200 GraphQL account lock
+  await assert.rejects(
     () => client._parseGraphQL({ statusCode: 403, body: 'Forbidden' }, 'op3'),
     (err) => err.code === 'CIRCUIT_BREAKER_TRIPPED' && err.halt === true
   );
   client.resetCircuitBreaker();
-  assert.throws(
+  await assert.rejects(
     () => client._parseGraphQL({ statusCode: 429, headers: { 'retry-after': '120' }, body: 'Rate limited' }, 'op4'),
     (err) => err.code === 'CIRCUIT_BREAKER_TRIPPED' && err.halt === true
   );
   assert.ok(client.getRateLimitStatus().cooldownRemainingSeconds >= 100);
 
   client.resetCircuitBreaker();
-  assert.throws(
+  await assert.rejects(
     () =>
       client._parseGraphQL(
         { statusCode: 200, body: JSON.stringify({ errors: [{ code: 326, message: 'Account locked' }] }) },
@@ -559,6 +559,214 @@ https.request = (opts, cb) => {
       assert.equal(okThreadClient.rateLimiter.strict, true);
     }
   );
+
+  // 10. If breaker trips while waiting in rateLimiter.acquire(), queued request NEVER hits network
+  const waitTripClient = new XUseClient({
+    authToken: 'FAKE123',
+    ct0: 'FAKECT0',
+    proxyUrl: '',
+    breakerPath: path.join(dir, 'cb_waittrip.json'),
+    rateLimitPath: path.join(dir, 'rl_waittrip.json')
+  });
+  let networkCallsOnTrip = 0;
+  const origAcquire = waitTripClient.rateLimiter.acquire.bind(waitTripClient.rateLimiter);
+  waitTripClient.rateLimiter.acquire = async (...a) => {
+    const ev = await origAcquire(...a);
+    waitTripClient.circuitBreaker.recordFailure('Tripped while waiting', { immediate: true });
+    return ev;
+  };
+  await withMockHttps(
+    () => {
+      networkCallsOnTrip += 1;
+      return { statusCode: 200, body: '{}' };
+    },
+    async () => {
+      await assert.rejects(
+        () => waitTripClient._httpRequest({ hostname: 'x.com', path: '/i/api/graphql/x/Op', method: 'GET' }),
+        (err) => err.code === 'CIRCUIT_BREAKER_TRIPPED' && err.halt === true
+      );
+    }
+  );
+  assert.equal(networkCallsOnTrip, 0);
+
+  // 11. Ambiguous POST (network drop / truncated 200) -> CLI --json outputs AMBIGUOUS_WRITE_RESULT + halt: true,
+  //     thread stops before tweet #2, and pre-send errors (tripped breaker) do NOT report AMBIGUOUS_WRITE_RESULT
+  const postPreload = path.join(dir, 'mock_post_drop.js');
+  const countFile = path.join(dir, 'post_calls.txt');
+  fs.writeFileSync(
+    postPreload,
+    `
+const fs = require('fs');
+const https = require('https');
+const { EventEmitter } = require('events');
+const mode = process.env.POST_MOCK_MODE || 'drop';
+const countFile = ${JSON.stringify(countFile)};
+https.request = (opts, cb) => {
+  const req = new EventEmitter();
+  req.setTimeout = () => {};
+  req.destroy = (e) => req.emit('error', e);
+  req.write = () => {};
+  req.end = () => {
+    const res = new EventEmitter();
+    res.headers = {};
+    if (opts.path === '/home') {
+      res.statusCode = 200;
+      process.nextTick(() => { cb(res); res.emit('data', Buffer.from('<html></html>')); res.emit('end'); });
+      return;
+    }
+    const prev = fs.existsSync(countFile) ? Number(fs.readFileSync(countFile, 'utf8')) : 0;
+    fs.writeFileSync(countFile, String(prev + 1));
+    if (mode === 'drop') {
+      process.nextTick(() => req.emit('error', new Error('ECONNRESET mid-response')));
+      return;
+    }
+  };
+  return req;
+};
+`
+  );
+  const ambigHome = makeTempDir();
+  const ambigCli = spawnSync(process.execPath, ['-r', postPreload, cliPath, 'tweet', 'hello', '--json'], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      HOME: ambigHome,
+      POST_MOCK_MODE: 'drop',
+      X_AUTH_TOKEN: 'FAKE123',
+      X_CT0: 'FAKECT0',
+      X_PROXY_URL: '',
+      HTTPS_PROXY: '',
+      SOCKS_PROXY: ''
+    }
+  });
+  const ambigJson = JSON.parse(ambigCli.stderr);
+  assert.equal(ambigJson.code, 'AMBIGUOUS_WRITE_RESULT');
+  assert.equal(ambigJson.halt, true);
+  assert.equal(Number(fs.readFileSync(countFile, 'utf8')), 1);
+
+  const cbPre = new CircuitBreaker({ filePath: path.join(ambigHome, '.x-use', 'circuit_breaker.json') });
+  cbPre.recordFailure('Forced pre-trip', { immediate: true });
+  const preTripCli = spawnSync(process.execPath, ['-r', postPreload, cliPath, 'tweet', 'blocked', '--json'], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      HOME: ambigHome,
+      POST_MOCK_MODE: 'drop',
+      X_AUTH_TOKEN: 'FAKE123',
+      X_CT0: 'FAKECT0',
+      X_PROXY_URL: '',
+      HTTPS_PROXY: '',
+      SOCKS_PROXY: ''
+    }
+  });
+  const preTripJson = JSON.parse(preTripCli.stderr);
+  assert.equal(preTripJson.code, 'CIRCUIT_BREAKER_TRIPPED');
+  assert.notEqual(preTripJson.code, 'AMBIGUOUS_WRITE_RESULT');
+  assert.equal(Number(fs.readFileSync(countFile, 'utf8')), 1);
+  fs.rmSync(ambigHome, { recursive: true, force: true });
+
+  const dropThreadClient = new XUseClient({
+    authToken: 'FAKE123',
+    ct0: 'FAKECT0',
+    proxyUrl: '',
+    strictRateLimit: true,
+    breakerPath: path.join(dir, 'cb_thread_drop.json'),
+    rateLimitPath: path.join(dir, 'rl_thread_drop.json')
+  });
+  let dropThreadPosts = 0;
+  await withMockHttps(
+    (opts) => {
+      if (opts.path === '/home') return { statusCode: 200, body: '<html></html>' };
+      dropThreadPosts += 1;
+      return { statusCode: 200, body: '{"data":{"truncated' };
+    },
+    async () => {
+      await assert.rejects(
+        () => dropThreadClient.postThread(['tweet-1', 'tweet-2']),
+        (err) =>
+          err.code === 'AMBIGUOUS_WRITE_RESULT' &&
+          err.halt === true &&
+          Array.isArray(err.published) &&
+          err.published.length === 0
+      );
+    }
+  );
+  assert.equal(dropThreadPosts, 1);
+
+  // 12. 429 cooldown uses async lock, does not reset corrupted ledger, and preserves concurrent events across 2 processes
+  const corruptRlPath = path.join(dir, 'rl_corrupt_cd.json');
+  fs.writeFileSync(corruptRlPath, '{corrupted');
+  const corruptLimiter = new RateLimiter({ filePath: corruptRlPath });
+  await assert.rejects(() => corruptLimiter.recordCooldown(90), (err) => err.halt === true);
+  assert.equal(fs.readFileSync(corruptRlPath, 'utf8'), '{corrupted');
+
+  const conc429Preload = path.join(dir, 'mock_conc_429.js');
+  fs.writeFileSync(
+    conc429Preload,
+    `
+const https = require('https');
+const { EventEmitter } = require('events');
+https.request = (opts, cb) => {
+  const req = new EventEmitter();
+  req.setTimeout = () => {};
+  req.destroy = (e) => req.emit('error', e);
+  req.write = () => {};
+  req.end = () => {
+    const res = new EventEmitter();
+    if (opts.path === '/home') {
+      setTimeout(() => {
+        res.statusCode = 429;
+        res.headers = { 'retry-after': '120' };
+        cb(res);
+        res.emit('data', Buffer.from('Rate limited'));
+        res.emit('end');
+      }, 60);
+      return;
+    }
+    res.statusCode = 200;
+    res.headers = {};
+    const body = JSON.stringify({
+      data: { user_result_by_screen_name: { result: { rest_id: '12', core: { name: 'Jack', screen_name: 'jack' } } } }
+    });
+    process.nextTick(() => { cb(res); res.emit('data', Buffer.from(body)); res.emit('end'); });
+  };
+  return req;
+};
+`
+  );
+  const rl429Home = makeTempDir();
+  const runProc = (cmdArgs) =>
+    new Promise((resolve) => {
+      execFile(
+        process.execPath,
+        ['-r', conc429Preload, cliPath, ...cmdArgs],
+        {
+          env: {
+            ...process.env,
+            HOME: rl429Home,
+            X_AUTH_TOKEN: 'FAKE123',
+            X_CT0: 'FAKECT0',
+            X_PROXY_URL: '',
+            HTTPS_PROXY: '',
+            SOCKS_PROXY: ''
+          }
+        },
+        (error, stdout, stderr) => resolve({ code: error ? error.code : 0, stdout, stderr })
+      );
+    });
+  const [pCheck, pProfile] = await Promise.all([
+    runProc(['check', '--json']),
+    runProc(['profile', 'jack', '--json'])
+  ]);
+  assert.equal(pCheck.code, 3);
+  const ledgerOnDisk = JSON.parse(fs.readFileSync(path.join(rl429Home, '.x-use', 'rate_limit.json'), 'utf8'));
+  const breakerOnDisk = JSON.parse(fs.readFileSync(path.join(rl429Home, '.x-use', 'circuit_breaker.json'), 'utf8'));
+  assert.equal(breakerOnDisk.tripped, true);
+  assert.equal(ledgerOnDisk.lastEventId, 2);
+  assert.equal(ledgerOnDisk.events.length, 2);
+  assert.ok(ledgerOnDisk.cooldownUntilMs > Date.now() + 90000);
+  assert.ok(pProfile.code === 0 || pProfile.code === 2 || pProfile.code === 3);
+  fs.rmSync(rl429Home, { recursive: true, force: true });
 
   fs.rmSync(dir, { recursive: true, force: true });
 });

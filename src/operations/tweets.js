@@ -27,7 +27,7 @@ async function createTweet(client, text, options = {}) {
   });
 
   const res = await client._postGraphQL(apiPath, headers, payload, 'CreateTweet');
-  const data = client._parseGraphQL(res, 'createTweet');
+  const data = await client._parseGraphQL(res, 'createTweet');
   const tweetResult = data.data?.create_tweet?.tweet_results?.result || data.data?.create_tweet || {};
   const tweetId =
     tweetResult.rest_id || tweetResult.legacy?.id_str || tweetResult.edit_control?.edit_tweet_ids?.[0] || null;
@@ -121,8 +121,8 @@ async function deleteTweet(client, tweetId) {
     variables: { tweet_id: String(tweetId), dark_request: false },
     queryId
   });
-  const res = await client._postGraphQL(apiPath, headers, payload);
-  return client._parseGraphQL(res, 'deleteTweet');
+  const res = await client._postGraphQL(apiPath, headers, payload, 'DeleteTweet');
+  return await client._parseGraphQL(res, 'deleteTweet');
 }
 
 async function favoriteTweet(client, tweetId) {
@@ -133,8 +133,8 @@ async function favoriteTweet(client, tweetId) {
     variables: { tweet_id: String(tweetId) },
     queryId
   });
-  const res = await client._postGraphQL(apiPath, headers, payload);
-  return client._parseGraphQL(res, 'favoriteTweet');
+  const res = await client._postGraphQL(apiPath, headers, payload, 'FavoriteTweet');
+  return await client._parseGraphQL(res, 'favoriteTweet');
 }
 
 async function retweet(client, tweetId) {
@@ -145,8 +145,8 @@ async function retweet(client, tweetId) {
     variables: { tweet_id: String(tweetId), dark_request: false },
     queryId
   });
-  const res = await client._postGraphQL(apiPath, headers, payload);
-  return client._parseGraphQL(res, 'retweet');
+  const res = await client._postGraphQL(apiPath, headers, payload, 'CreateRetweet');
+  return await client._parseGraphQL(res, 'retweet');
 }
 
 module.exports = {

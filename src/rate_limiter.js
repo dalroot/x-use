@@ -189,50 +189,16 @@ class RateLimiter {
 
   async recordCooldown(seconds) {
     const sec = Math.max(1, Math.ceil(Number(seconds) || 60));
-    return this._withLock(async () => this._recordCooldownLocked(sec));
-  }
-
-  _recordCooldownLocked(sec) {
-    const now = Date.now();
-    let state;
-    try {
-      state = this._load(now);
-    } catch (_) {
-      state = { lastEventId: 0, lastTsMs: now, cooldownUntilMs: 0, events: [] };
-    }
-    const until = now + sec * 1000;
-    if (until > (state.cooldownUntilMs || 0)) {
-      state.cooldownUntilMs = until;
-      this._save(state);
-    }
-    return state;
-  }
-
-  recordCooldownSync(seconds) {
-    const sec = Math.max(1, Math.ceil(Number(seconds) || 60));
-    const dir = path.dirname(this.filePath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    }
-    const lockPath = `${this.filePath}.lock`;
-    let lockFd = null;
-    try {
-      lockFd = fs.openSync(lockPath, 'wx', 0o600);
-    } catch (_) {
-      // Best-effort atomic write if lock is momentarily held
-    }
-    try {
-      return this._recordCooldownLocked(sec);
-    } finally {
-      if (lockFd !== null) {
-        try {
-          fs.closeSync(lockFd);
-        } catch (_) {}
-        try {
-          fs.unlinkSync(lockPath);
-        } catch (_) {}
+    return this._withLock(async () => {
+      const now = Date.now();
+      const state = this._load(now);
+      const until = now + sec * 1000;
+      if (until > (state.cooldownUntilMs || 0)) {
+        state.cooldownUntilMs = until;
+        this._save(state);
       }
-    }
+      return state;
+    });
   }
 
   /**

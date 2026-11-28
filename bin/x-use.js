@@ -343,8 +343,14 @@ async function runInteractiveMenu(baseFlags) {
       const payload = {
         ok: false,
         error: err.message,
+        ...(err.code ? { code: err.code } : {}),
         ...(err.halt ? { halt: true, actionRequired: 'STOP_AND_NOTIFY_USER' } : {}),
-        ...(err.code === 'CIRCUIT_BREAKER_TRIPPED' ? { circuitBreakerTripped: true } : {}),
+        ...(err.code === 'CIRCUIT_BREAKER_TRIPPED' || err.circuitBreakerTripped
+          ? { circuitBreakerTripped: true }
+          : {}),
+        ...(err.code === 'AMBIGUOUS_WRITE_RESULT' || err.ambiguousWrite
+          ? { ambiguousWrite: true }
+          : {}),
         ...(err.code === 'RATE_LIMIT_EXCEEDED'
           ? { rateLimitExceeded: true, retryAfterSeconds: err.retryAfterSeconds }
           : {}),

@@ -141,8 +141,18 @@ function httpRequest(options, postData = null, agent = null) {
     };
     const req = https.request(reqOpts, (res) => {
       const chunks = [];
+      let ended = false;
       res.on('data', (c) => chunks.push(c));
+      res.on('aborted', () => {
+        if (!ended) reject(new Error('Response aborted before completion'));
+      });
+      res.on('close', () => {
+        if (!ended && res.complete === false) {
+          reject(new Error('Response closed prematurely before completion'));
+        }
+      });
       res.on('end', () => {
+        ended = true;
         resolve({
           statusCode: res.statusCode,
           headers: res.headers,

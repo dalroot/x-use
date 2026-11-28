@@ -68,7 +68,7 @@ async function _fetchApiGraphQL(client, queryId, opName, variables, actionName) 
   const headers = await client._getHeaders('GET', apiPath, true);
   const fullPath = `${apiPath}?variables=${encodeURIComponent(JSON.stringify(variables))}`;
   const res = await client._getApiGraphQL(fullPath, headers, opName);
-  return client._parseGraphQL(res, actionName);
+  return await client._parseGraphQL(res, actionName);
 }
 
 async function getProfile(client, screenName) {
@@ -297,8 +297,8 @@ async function searchTypeahead(client, query) {
 async function getBadgeCounts(client) {
   const apiPath = '/2/badge_count/badge_count.json?supports_ntab_urt=1&include_xchat_count=1';
   const headers = await client._getHeaders('GET', apiPath, true);
-  const res = await client._getApiGraphQL(apiPath, headers);
-  return client._parseGraphQL(res, 'getBadgeCounts');
+  const res = await client._getApiGraphQL(apiPath, headers, 'getBadgeCounts');
+  return await client._parseGraphQL(res, 'getBadgeCounts');
 }
 
 module.exports = {
