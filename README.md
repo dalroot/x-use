@@ -17,7 +17,9 @@ with a built-in persistent rate limiter and safety circuit breaker. No Chromium,
 [![No Browser](https://img.shields.io/badge/Runtime-Pure%20HTTPS-0A66C2?style=flat-square)](#how-it-works)
 [![Agent Ready](https://img.shields.io/badge/AI%20Agents-JSON%20CLI%20%2B%20SKILL.md-6E56CF?style=flat-square)](SKILL.md)
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-F59E0B?style=flat-square)](LICENSE)
+[![Website](https://img.shields.io/badge/Site-dalroot.github.io%2Fx--use-000000?style=flat-square)](https://dalroot.github.io/x-use/)
 
+[Live Site](https://dalroot.github.io/x-use/) ·
 [Quick Start](#quick-start) ·
 [Commands](#commands) ·
 [Safety Model](#safety-model) ·
