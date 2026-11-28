@@ -1,7 +1,9 @@
 const { parseHTML } = require('linkedom');
 const { ClientTransaction } = require('x-client-transaction-id');
-const { BEARER_TOKEN, DEFAULT_USER_AGENT, DEFAULT_QUERY_IDS } = require('./constants');
+const { BEARER_TOKEN, API_X_HOST, DEFAULT_USER_AGENT, DEFAULT_QUERY_IDS } = require('./constants');
 const { resolveCredentials, loadSavedConfig } = require('./auth');
+const { CircuitBreaker } = require('./circuit_breaker');
+const { RateLimiter } = require('./rate_limiter');
 const { createProxyAgent, httpRequest, parseGraphQLResponse } = require('./transport');
 const tweetsOps = require('./operations/tweets');
 const usersOps = require('./operations/users');
@@ -46,6 +48,17 @@ class XUseClient {
 
     this.transaction = null;
     this._transactionInitFailed = false;
+    this.circuitBreaker = new CircuitBreaker({
+      filePath: options.breakerPath,
+      maxErrors: options.maxErrors
+    });
+    this.rateLimiter = new RateLimiter({
+      filePath: options.rateLimitPath,
+      maxReads: options.maxReads,
+      maxWrites: options.maxWrites,
+      strict: options.strictRateLimit,
+      ...options.rateLimitOptions
+    });
   }
 
   _ensureAuth() {
@@ -61,13 +74,38 @@ class XUseClient {
     this.authToken = creds.authToken;
   }
 
-  _httpRequest(options, postData = null) {
-    return httpRequest(options, postData, this.agent);
+  async _httpRequest(options, postData = null) {
+    this.circuitBreaker.assertReady();
+    this.lastEvent = await this.rateLimiter.acquire(options.method || 'GET', options.path || '');
+    try {
+      return await httpRequest(options, postData, this.agent);
+    } catch (err) {
+      const state = this.circuitBreaker.recordFailure(err.message);
+      if (state.tripped) {
+        const trippedErr = new Error(
+          `${err.message} | SAFETY CIRCUIT BREAKER TRIPPED (${state.consecutiveErrors} consecutive errors). Run "xuse reset-breaker" after resolving.`
+        );
+        trippedErr.code = 'CIRCUIT_BREAKER_TRIPPED';
+        trippedErr.halt = true;
+        trippedErr.lastError = err.message;
+        throw trippedErr;
+      }
+      throw err;
+    }
   }
 
   _getGraphQL(fullPath, headers) {
     return this._httpRequest({
       hostname: 'x.com',
+      path: fullPath,
+      method: 'GET',
+      headers
+    });
+  }
+
+  _getApiGraphQL(fullPath, headers) {
+    return this._httpRequest({
+      hostname: API_X_HOST,
       path: fullPath,
       method: 'GET',
       headers
@@ -90,7 +128,45 @@ class XUseClient {
   }
 
   _parseGraphQL(res, actionName) {
-    return parseGraphQLResponse(res, actionName);
+    try {
+      const parsed = parseGraphQLResponse(res, actionName);
+      this.circuitBreaker.recordSuccess();
+      return parsed;
+    } catch (err) {
+      const state = this.circuitBreaker.recordFailure(err.message);
+      if (state.tripped) {
+        const trippedErr = new Error(
+          `${err.message} | SAFETY CIRCUIT BREAKER TRIPPED (${state.consecutiveErrors} consecutive errors). Run "xuse reset-breaker" after resolving.`
+        );
+        trippedErr.code = 'CIRCUIT_BREAKER_TRIPPED';
+        trippedErr.halt = true;
+        trippedErr.lastError = err.message;
+        throw trippedErr;
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Return the current 2-error safety circuit breaker state.
+   * @returns {{ consecutiveErrors: number, tripped: boolean, lastError: string|null, lastErrorAt: string|null, lastSuccessAt: string|null }}
+   */
+  getCircuitBreakerStatus() {
+    return this.circuitBreaker.getStatus();
+  }
+
+  /**
+   * Reset the safety circuit breaker after inspecting and fixing the cause of errors.
+   */
+  resetCircuitBreaker() {
+    return this.circuitBreaker.reset();
+  }
+
+  /**
+   * Return persistent rate-limit ledger status with exact eventId and ISO timestamp.
+   */
+  getRateLimitStatus() {
+    return this.rateLimiter.getStatus();
   }
 
   /**
@@ -141,8 +217,10 @@ class XUseClient {
     }
   }
 
-  async _getHeaders(method, apiPath) {
-    if (!this.transaction && !this._transactionInitFailed) {
+  async _getHeaders(method, apiPath, skipInit = false, targetHost = 'x.com') {
+    if (skipInit) {
+      this._ensureAuth();
+    } else if (!this.transaction && !this._transactionInitFailed) {
       await this.init();
     } else {
       this._ensureAuth();
@@ -151,9 +229,19 @@ class XUseClient {
       authorization: this.bearerToken,
       'x-csrf-token': this.ct0,
       cookie: this.cookieHeader,
+      origin: 'https://x.com',
+      referer: 'https://x.com/',
       'x-twitter-active-user': 'yes',
       'x-twitter-auth-type': 'OAuth2Session',
       'x-twitter-client-language': 'en',
+      'sec-ch-ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+      'sec-ch-ua-mobile': '?0',
+      'sec-ch-ua-platform': '"Linux"',
+      'sec-fetch-dest': 'empty',
+      'sec-fetch-mode': 'cors',
+      'sec-fetch-site': targetHost === 'api.x.com' ? 'same-site' : 'same-origin',
+      'accept-language': 'en-US,en;q=0.9',
+      priority: 'u=1, i',
       'user-agent': this.userAgent,
       'content-type': 'application/json',
       accept: '*/*'
@@ -164,34 +252,143 @@ class XUseClient {
     return headers;
   }
 
+  /**
+   * Fetch public profile metadata for an X handle (without @).
+   * Safe read operation; guarded by the 2-error circuit breaker.
+   * @param {string} screenName - Target username without '@'.
+   * @returns {Promise<{id:string, name:string, screenName:string, bio:string, followersCount:number, followingCount:number, tweetsCount:number, isBlueVerified:boolean}>}
+   */
   getProfile(screenName) {
     return usersOps.getProfile(this, screenName);
   }
 
-  getUserTweets(screenNameOrUserId, count = 20) {
-    return usersOps.getUserTweets(this, screenNameOrUserId, count);
+  /**
+   * Fetch original tweets authored by a user via api.x.com UserOriginalsTimeline.
+   * @param {string} screenName - Username without '@'.
+   * @param {number} [count=20] - Number of tweets to request.
+   * @param {string|null} [cursor=null] - Pagination cursor.
+   * @returns {Promise<Array<{id:string, text:string, author:string, screenName:string, createdAt:string, likes:number, retweets:number, replies:number, views:string, links:string[], url:string}>>}
+   */
+  getUserTweets(screenName, count = 20, cursor = null) {
+    return usersOps.getUserTweets(this, screenName, count, cursor);
   }
 
-  searchTweets(query, count = 20, product = 'Latest') {
-    return usersOps.searchTweets(this, query, count, product);
+  /**
+   * Fetch reposts/retweets made by a user via api.x.com UserRepostsTimeline.
+   * @param {string} screenName - Username without '@'.
+   * @param {number} [count=20]
+   * @param {string|null} [cursor=null]
+   */
+  getUserReposts(screenName, count = 20, cursor = null) {
+    return usersOps.getUserReposts(this, screenName, count, cursor);
   }
 
+  /**
+   * Search X posts via api.x.com SearchByRawQuery.
+   * @param {string} query - Search query string.
+   * @param {number} [count=20]
+   * @param {'Latest'|'Top'|'People'|'Photos'|'Videos'} [product='Latest']
+   * @param {string|null} [cursor=null]
+   */
+  searchTweets(query, count = 20, product = 'Latest', cursor = null) {
+    return usersOps.searchTweets(this, query, count, product, cursor);
+  }
+
+  /**
+   * Fetch the authenticated account's Home timeline (TL).
+   * @param {number} [count=20]
+   * @param {string|null} [cursor=null]
+   */
+  getHomeTimeline(count = 20, cursor = null) {
+    return usersOps.getHomeTimeline(this, count, cursor);
+  }
+
+  /**
+   * Fetch X Explore feed via genericTimelineQuery.
+   * @param {number} [count=20]
+   * @param {string|null} [cursor=null]
+   * @param {string|null} [timelineId=null] - Optional custom Explore timeline ID.
+   */
+  getExplore(count = 20, cursor = null, timelineId = null) {
+    return usersOps.getExplore(this, count, cursor, timelineId);
+  }
+
+  /**
+   * Fetch a single tweet by full URL (https://x.com/.../status/ID) or numeric ID.
+   * @param {string} tweetIdOrUrl - Tweet URL or numeric rest_id.
+   */
+  getTweet(tweetIdOrUrl) {
+    return usersOps.getTweet(this, tweetIdOrUrl);
+  }
+
+  /**
+   * Fetch account notifications (mentions, replies, likes, follows).
+   * Prefer calling getBadgeCounts() first so you only query notifications when unread > 0.
+   * @param {number} [count=40]
+   * @param {'All'|'Verified'|'Mentions'} [timelineType='All']
+   * @param {string|null} [cursor=null]
+   */
+  getNotifications(count = 40, timelineType = 'All', cursor = null) {
+    return usersOps.getNotifications(this, count, timelineType, cursor);
+  }
+
+  /**
+   * Fetch autocomplete search suggestions (queries and matching user accounts).
+   * @param {string} query
+   */
+  searchTypeahead(query) {
+    return usersOps.searchTypeahead(this, query);
+  }
+
+  /**
+   * Lightweight (~100B) unread counter check via /2/badge_count/badge_count.json.
+   * Use before getNotifications() to avoid unnecessary GraphQL traffic.
+   * @returns {Promise<{ntab_unread_count:number, dm_unread_count:number, total_unread_count:number, xchat_unread_count:number}>}
+   */
+  getBadgeCounts() {
+    return usersOps.getBadgeCounts(this);
+  }
+
+  /**
+   * Publish a single tweet. Never auto-retried on failure to prevent duplicate posts.
+   * @param {string} text - Tweet body.
+   * @param {Object} [options]
+   */
   createTweet(text, options = {}) {
     return tweetsOps.createTweet(this, text, options);
   }
 
+  /**
+   * Reply to an existing tweet by numeric ID. Never auto-retried on failure.
+   * @param {string} tweetId
+   * @param {string} text
+   * @param {Object} [options]
+   */
   replyTweet(tweetId, text, options = {}) {
     return tweetsOps.replyTweet(this, tweetId, text, options);
   }
 
+  /**
+   * Publish a sequential thread from an array of strings with a delay between posts.
+   * @param {string[]} tweets
+   * @param {number} [delayMs=1200]
+   */
   postThread(tweets, delayMs = 1200) {
     return tweetsOps.postThread(this, tweets, delayMs);
   }
 
+  /**
+   * Delete one of your own tweets by ID.
+   * @param {string} tweetId
+   */
   deleteTweet(tweetId) {
     return tweetsOps.deleteTweet(this, tweetId);
   }
 
+  /**
+   * Like/favorite a tweet by ID.
+   * @param {string} tweetId
+   */
   favoriteTweet(tweetId) {
     return tweetsOps.favoriteTweet(this, tweetId);
   }

@@ -3,7 +3,14 @@ const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
 const XUseClient = require('../src');
-const { saveConfig, loadSavedConfig, CONFIG_PATH } = require('../src/auth');
+const {
+  saveConfig,
+  loadSavedConfig,
+  encryptCookiesVault,
+  isInsecureFileMode
+} = require('../src/auth');
+const { CircuitBreaker } = require('../src/circuit_breaker');
+const { RateLimiter } = require('../src/rate_limiter');
 
 function printHelp() {
   console.log(`xuse (x-use / agent-x-use) — Browserless X (Twitter) CLI for AI Agents
@@ -23,11 +30,23 @@ Commands:
   like <tweetId>            Like/favorite a tweet
   retweet <tweetId>         Retweet a tweet
   tweets <username> [n]     Fetch recent tweets for a user
+  reposts <username> [n]    Fetch recent reposts for a user
   search <query> [n]        Search tweets
+  home [n]                  Fetch Home timeline
+  explore [n]               Fetch Explore timeline
+  read <url|tweetId>        Fetch a single tweet by URL or ID
+  notifications [n]         Fetch notifications
+  badges                    Check lightweight unread badge counts
+  suggest <query>           Search typeahead suggestions
+  breaker                   Show 2-error safety circuit breaker status
+  reset-breaker             Reset tripped safety circuit breaker
+  limits                    Show persistent rate-limit ledger & last eventId
 
 Options:
   --cookies <path>          Path to cookies JSON file (or set X_COOKIES_PATH)
+  --encrypt                 Encrypt cookies into ~/.x-use/cookies.vault using X_USE_KEY
   --proxy <url>             Proxy URL (or set X_PROXY_URL / SOCKS_PROXY)
+  --strict                  Halt immediately instead of waiting if pacing gap is not met
   --json                    Output structured JSON for AI agents
   -h, --help                Show help
 `);
@@ -35,11 +54,13 @@ Options:
 
 function parseArgs(argv) {
   const positionals = [];
-  const flags = { json: false, cookies: null, proxy: null };
+  const flags = { json: false, cookies: null, proxy: null, encrypt: false, strict: false };
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--json') flags.json = true;
+    else if (arg === '--encrypt') flags.encrypt = true;
+    else if (arg === '--strict') flags.strict = true;
     else if (arg === '--cookies' && argv[i + 1]) flags.cookies = argv[++i];
     else if (arg === '--proxy' && argv[i + 1]) flags.proxy = argv[++i];
     else if (arg === '-h' || arg === '--help') flags.help = true;
@@ -162,7 +183,16 @@ async function runInteractiveMenu(baseFlags) {
 
   if (command === 'setup' || command === 'auth') {
     const updates = {};
-    if (flags.cookies) updates.cookiesPath = path.resolve(flags.cookies);
+    if (flags.cookies && flags.encrypt) {
+      const vaultPath = encryptCookiesVault(flags.cookies, process.env.X_USE_KEY);
+      updates.vaultPath = vaultPath;
+      updates.cookiesPath = null;
+    } else if (flags.cookies) {
+      updates.cookiesPath = path.resolve(flags.cookies);
+      if (isInsecureFileMode(updates.cookiesPath) && !flags.json) {
+        console.warn(`⚠ Warning: ${updates.cookiesPath} has group/world permissions. Run: chmod 600 "${updates.cookiesPath}"`);
+      }
+    }
     if (flags.proxy) updates.proxyUrl = flags.proxy;
     if (Object.keys(updates).length === 0) {
       console.log('Usage: xuse setup --cookies ./cookies.json [--proxy socks5h://127.0.0.1:10808]');
@@ -179,7 +209,8 @@ async function runInteractiveMenu(baseFlags) {
 
   const client = new XUseClient({
     ...(flags.cookies ? { cookiesPath: flags.cookies } : {}),
-    ...(flags.proxy ? { proxyUrl: flags.proxy } : {})
+    ...(flags.proxy ? { proxyUrl: flags.proxy } : {}),
+    ...(flags.strict ? { strictRateLimit: true } : {})
   });
 
   try {
@@ -227,22 +258,69 @@ async function runInteractiveMenu(baseFlags) {
         if (!args[0]) throw new Error('Missing <username>');
         result = await client.getUserTweets(args[0], Number(args[1]) || 20);
         break;
+      case 'reposts':
+        if (!args[0]) throw new Error('Missing <username>');
+        result = await client.getUserReposts(args[0], Number(args[1]) || 20);
+        break;
       case 'search':
         if (!args[0]) throw new Error('Missing <query>');
         result = await client.searchTweets(args[0], Number(args[1]) || 20);
+        break;
+      case 'home':
+        result = await client.getHomeTimeline(Number(args[0]) || 20);
+        break;
+      case 'explore':
+        result = await client.getExplore(Number(args[0]) || 20);
+        break;
+      case 'read':
+        if (!args[0]) throw new Error('Missing <tweetId>');
+        result = await client.getTweet(args[0]);
+        break;
+      case 'notifications':
+        result = await client.getNotifications(Number(args[0]) || 40);
+        break;
+      case 'badges':
+        result = await client.getBadgeCounts();
+        break;
+      case 'breaker':
+        result = new CircuitBreaker().getStatus();
+        break;
+      case 'reset-breaker':
+        result = new CircuitBreaker().reset();
+        break;
+      case 'limits':
+        result = new RateLimiter().getStatus();
+        break;
+      case 'suggest':
+        if (!args[0]) throw new Error('Missing <query>');
+        result = await client.searchTypeahead(args.join(' '));
         break;
       default:
         throw new Error(`Unknown command: ${command}`);
     }
 
     if (flags.json) {
-      console.log(JSON.stringify({ ok: true, data: result }, null, 2));
+      const out = {
+        ok: true,
+        ...(client.lastEvent ? { event: client.lastEvent } : {}),
+        data: result
+      };
+      console.log(JSON.stringify(out, null, 2));
     } else {
       console.log(result);
     }
   } catch (err) {
     if (flags.json) {
-      console.error(JSON.stringify({ ok: false, error: err.message }, null, 2));
+      const payload = {
+        ok: false,
+        error: err.message,
+        ...(err.halt ? { halt: true, actionRequired: 'STOP_AND_NOTIFY_USER' } : {}),
+        ...(err.code === 'CIRCUIT_BREAKER_TRIPPED' ? { circuitBreakerTripped: true } : {}),
+        ...(err.code === 'RATE_LIMIT_EXCEEDED'
+          ? { rateLimitExceeded: true, retryAfterSeconds: err.retryAfterSeconds }
+          : {})
+      };
+      console.error(JSON.stringify(payload, null, 2));
     } else {
       console.error('Error:', err.message);
     }
