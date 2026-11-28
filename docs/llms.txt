@@ -1,21 +1,23 @@
 # x-use
 
-> Browserless X (Twitter) CLI & Node.js SDK built to connect AI agents (Claude Code, Codex, Gemini, Cursor, Muse, OpenClaw, and custom LLM agents) to X over pure HTTPS—with an encrypted cookie vault, persistent rate limiter, and circuit breaker.
+> Browserless X (Twitter) CLI & Node.js SDK built to connect any AI model or AI agent (Claude Code, OpenAI Codex, ChatGPT, Gemini, Meta Muse, Cursor, Windsurf, GitHub Copilot, Grok, DeepSeek, Qwen, Mistral, Ollama, OpenClaw, LangChain, CrewAI, AutoGPT, MCP servers, and custom autonomous agents) to X over pure HTTPS—with an encrypted cookie vault, persistent rate limiter, and circuit breaker.
 
 ## Overview
 
 `x-use` (`xuse` / `agent-x-use`) lets AI agents read timelines, search posts, fetch profiles and notifications, and publish tweets, replies, threads, likes, and retweets without launching Chromium, Puppeteer, or Playwright.
 
 - **Website:** https://dalroot.github.io/x-use/
+- **Full LLM Reference:** https://dalroot.github.io/x-use/llms-full.txt
 - **Repository:** https://github.com/dalroot/x-use
 - **Runtime:** Node.js `>=20.19.0` (Pure HTTPS + X GraphQL + `x-client-transaction-id`)
 - **License:** PolyForm Noncommercial License 1.0.0
 
-## Documentation for Agents
+## Documentation for Agents & Crawlers
 
-- [SKILL.md](https://raw.githubusercontent.com/dalroot/x-use/main/SKILL.md): Complete operational rules, CLI commands, JSON output schema, and exit codes (`0`, `1`, `2`, `3`, `4`) for AI agents.
-- [AGENTS.md](https://raw.githubusercontent.com/dalroot/x-use/main/AGENTS.md): Repository and safety rules for coding and CLI agents.
-- [README.md](https://raw.githubusercontent.com/dalroot/x-use/main/README.md): Installation, Node.js SDK usage, proxy support, and cookie security guide.
+- [llms-full.txt](https://dalroot.github.io/x-use/llms-full.txt): Complete single-file reference with CLI commands, Node.js SDK examples, JSON schema, exit codes, and safety rules.
+- [SKILL.md](https://raw.githubusercontent.com/dalroot/x-use/main/SKILL.md): Operational skill file for AI agents (`0`, `1`, `2`, `3`, `4` exit codes and `--json` contract).
+- [AGENTS.md](https://raw.githubusercontent.com/dalroot/x-use/main/AGENTS.md): Standard repository and safety rules for AI coding and CLI agents.
+- [README.md](https://raw.githubusercontent.com/dalroot/x-use/main/README.md): Full installation, Node.js SDK, proxy support, and encrypted cookie vault documentation.
 
 ## Safety & Anti-Ban Architecture
 

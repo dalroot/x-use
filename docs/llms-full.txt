@@ -1,0 +1,102 @@
+# x-use — Full Reference for AI Models & Agents
+
+> Connect any AI agent or LLM to X (Twitter) without a browser. Pure HTTPS, zero Chromium, structured JSON CLI & Node.js SDK, AES-256-GCM cookie vault, persistent rate limiter, and circuit breaker.
+
+- **Website:** https://dalroot.github.io/x-use/
+- **GitHub:** https://github.com/dalroot/x-use
+- **Version:** 1.1.0
+- **Runtime:** Node.js `>=20.19.0`
+- **License:** PolyForm Noncommercial License 1.0.0
+
+---
+
+## Compatible AI Agents & Frameworks
+
+`x-use` works with any agent or workflow that can invoke a shell command or import a Node.js module:
+Claude Code, OpenAI Codex, ChatGPT, Google Gemini, Meta Muse, Cursor, Windsurf, GitHub Copilot, Grok, DeepSeek, Qwen, Mistral, Ollama, OpenClaw, LangChain, CrewAI, AutoGPT, MCP tool wrappers, and custom autonomous Node.js/Python agent pipelines.
+
+---
+
+## Quick Install
+
+```bash
+git clone https://github.com/dalroot/x-use.git
+cd x-use
+npm install
+npm test
+npm link
+```
+
+### Encrypted Cookie Setup (Run by Human Only)
+
+```bash
+export X_USE_KEY="long-random-passphrase"
+xuse setup --cookies ./cookies.json --encrypt
+rm ./cookies.json
+```
+
+---
+
+## CLI Commands (Always pass `--json` in agent mode)
+
+### Diagnostics & Limits
+- `xuse check --json` — Verify session cookies and `x-client-transaction-id` readiness
+- `xuse limits --json` — Show remaining read/write quota and circuit breaker state
+- `xuse reset-breaker` — Interactive human-only TTY reset
+- `xuse reset-limits` — Interactive human-only TTY reset
+
+### Read Operations (Default cap: 50 reads / 15 min, 3–6s jitter)
+- `xuse profile <username> --json`
+- `xuse tweets <username> [count] --json`
+- `xuse reposts <username> [count] --json`
+- `xuse search "<query>" [count] --json`
+- `xuse suggest "<query>" --json`
+- `xuse home [count] --json`
+- `xuse explore [count] --json`
+- `xuse read <tweet_url_or_id> --json`
+- `xuse badges --json`
+- `xuse notifications [count] --json`
+
+### Write Operations (Require explicit human confirmation; Default cap: 15 writes / 60 min, 15–30s jitter)
+- `xuse tweet "<text>" --json`
+- `xuse reply <tweet_url_or_id> "<text>" --json`
+- `xuse thread <thread.json> --json`
+- `xuse like <tweet_url_or_id> --json`
+- `xuse retweet <tweet_url_or_id> --json`
+- `xuse delete <tweet_url_or_id> --json`
+
+---
+
+## Exit Codes & Agent Control Flow
+
+- `exit 0` — Success (`ok: true`)
+- `exit 1` — Operational or API error
+- `exit 2` — Rate limit reached (`halt: true`) — STOP and inform the user
+- `exit 3` — Circuit breaker tripped (`halt: true`) — STOP and inform the user
+- `exit 4` — Pacing wait (`pacingWait: true`) — sleep `waitSeconds` and retry once
+
+---
+
+## Node.js SDK
+
+```js
+const { XUseClient } = require('x-use');
+
+const client = new XUseClient({
+  cookiesPath: './cookies.json',
+  proxy: process.env.X_PROXY || undefined
+});
+
+await client.init();
+const me = await client.checkSession();
+const tweets = await client.searchTweets('AI agents', 10);
+```
+
+---
+
+## Mandatory Agent Rules
+
+1. Never ask for, print, log, or store raw X cookies (`auth_token`, `ct0`), `X_USE_KEY`, or proxy credentials.
+2. Never edit `~/.x-use/` directly and never reset the circuit breaker or rate limiter.
+3. Run one command at a time; never spawn parallel `xuse` requests.
+4. Always ask the user before executing any write action (`tweet`, `reply`, `thread`, `like`, `retweet`, `delete`).
