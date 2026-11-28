@@ -26,11 +26,20 @@ async function createTweet(client, text, options = {}) {
     queryId
   });
 
-  const res = await client._postGraphQL(apiPath, headers, payload);
-  const data = client._parseGraphQL(res, 'createTweet');
+  const reqOpts = options.strict !== undefined ? { strict: options.strict } : {};
+  const res = await client._postGraphQL(apiPath, headers, payload, 'CreateTweet', reqOpts);
+  const data = await client._parseGraphQL(res, 'createTweet');
   const tweetResult = data.data?.create_tweet?.tweet_results?.result || data.data?.create_tweet || {};
   const tweetId =
-    tweetResult.rest_id || tweetResult.legacy?.id_str || tweetResult.edit_control?.edit_tweet_ids?.[0];
+    tweetResult.rest_id || tweetResult.legacy?.id_str || tweetResult.edit_control?.edit_tweet_ids?.[0] || null;
+  if (!tweetId) {
+    const err = new Error(
+      'CreateTweet returned HTTP 200 without a tweetId. Status is unknown — STOP and inspect X manually before retrying.'
+    );
+    err.halt = true;
+    err.code = 'AMBIGUOUS_WRITE_RESULT';
+    throw err;
+  }
   const screenName = tweetResult.core?.user_results?.result?.core?.screen_name || 'i';
 
   return {
@@ -46,31 +55,53 @@ async function replyTweet(client, tweetId, text, options = {}) {
   return createTweet(client, text, {
     ...options,
     variables: {
+      ...options.variables,
       reply: {
         in_reply_to_tweet_id: String(tweetId),
         exclude_reply_user_ids: []
-      },
-      ...options.variables
+      }
     }
   });
 }
 
-async function postThread(client, tweets, delayMs = 1200) {
+async function postThread(client, tweets, delayMs = 0) {
   if (!Array.isArray(tweets) || tweets.length === 0) {
     throw new Error('postThread requires a non-empty array of tweet texts.');
   }
+
+  if (typeof client.getRateLimitStatus === 'function') {
+    const status = client.getRateLimitStatus();
+    if (status.writesRemaining < tweets.length) {
+      const err = new Error(
+        `Insufficient write quota for ${tweets.length}-tweet thread (${status.writesRemaining} writes remaining in 60m window). Halting before publishing.`
+      );
+      err.code = 'RATE_LIMIT_EXCEEDED';
+      err.halt = true;
+      err.rateLimitExceeded = true;
+      throw err;
+    }
+  }
+
   const published = [];
   let parentId = null;
 
-  for (let i = 0; i < tweets.length; i++) {
-    const res = parentId
-      ? await replyTweet(client, parentId, tweets[i])
-      : await createTweet(client, tweets[i]);
-    published.push(res);
-    parentId = res.tweetId;
-    if (i < tweets.length - 1 && delayMs > 0) {
-      await new Promise((r) => setTimeout(r, delayMs));
+  try {
+    for (let i = 0; i < tweets.length; i++) {
+      // Honor strict mode before tweet #1, then let RateLimiter sleep 15-30s between tweets #2..N
+      // via per-request options (without mutating shared rateLimiter.strict).
+      const perTweetOpts = i > 0 ? { strict: false } : {};
+      const res = parentId
+        ? await replyTweet(client, parentId, tweets[i], perTweetOpts)
+        : await createTweet(client, tweets[i], perTweetOpts);
+      published.push(res);
+      parentId = res.tweetId;
+      if (i < tweets.length - 1 && delayMs > 0) {
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
     }
+  } catch (err) {
+    err.published = published;
+    throw err;
   }
   return published;
 }
@@ -83,8 +114,8 @@ async function deleteTweet(client, tweetId) {
     variables: { tweet_id: String(tweetId), dark_request: false },
     queryId
   });
-  const res = await client._postGraphQL(apiPath, headers, payload);
-  return client._parseGraphQL(res, 'deleteTweet');
+  const res = await client._postGraphQL(apiPath, headers, payload, 'DeleteTweet');
+  return await client._parseGraphQL(res, 'deleteTweet');
 }
 
 async function favoriteTweet(client, tweetId) {
@@ -95,8 +126,8 @@ async function favoriteTweet(client, tweetId) {
     variables: { tweet_id: String(tweetId) },
     queryId
   });
-  const res = await client._postGraphQL(apiPath, headers, payload);
-  return client._parseGraphQL(res, 'favoriteTweet');
+  const res = await client._postGraphQL(apiPath, headers, payload, 'FavoriteTweet');
+  return await client._parseGraphQL(res, 'favoriteTweet');
 }
 
 async function retweet(client, tweetId) {
@@ -107,8 +138,8 @@ async function retweet(client, tweetId) {
     variables: { tweet_id: String(tweetId), dark_request: false },
     queryId
   });
-  const res = await client._postGraphQL(apiPath, headers, payload);
-  return client._parseGraphQL(res, 'retweet');
+  const res = await client._postGraphQL(apiPath, headers, payload, 'CreateRetweet');
+  return await client._parseGraphQL(res, 'retweet');
 }
 
 module.exports = {

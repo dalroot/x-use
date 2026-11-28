@@ -3,7 +3,15 @@ const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
 const XUseClient = require('../src');
-const { saveConfig, loadSavedConfig, CONFIG_PATH } = require('../src/auth');
+const {
+  saveConfig,
+  loadSavedConfig,
+  encryptCookiesVault,
+  isInsecureFileMode
+} = require('../src/auth');
+const { CircuitBreaker } = require('../src/circuit_breaker');
+const { RateLimiter } = require('../src/rate_limiter');
+const { sanitizeProxyUrl } = require('../src/transport');
 
 function printHelp() {
   console.log(`xuse (x-use / agent-x-use) — Browserless X (Twitter) CLI for AI Agents
@@ -23,11 +31,24 @@ Commands:
   like <tweetId>            Like/favorite a tweet
   retweet <tweetId>         Retweet a tweet
   tweets <username> [n]     Fetch recent tweets for a user
+  reposts <username> [n]    Fetch recent reposts for a user
   search <query> [n]        Search tweets
+  home [n]                  Fetch Home timeline
+  explore [n]               Fetch Explore timeline
+  read <url|tweetId>        Fetch a single tweet by URL or ID
+  notifications [n]         Fetch notifications
+  badges                    Check lightweight unread badge counts
+  suggest <query>           Search typeahead suggestions
+  breaker                   Show 2-error safety circuit breaker status
+  reset-breaker             Reset tripped safety circuit breaker (TTY only)
+  limits                    Show persistent rate-limit ledger & last eventId
+  reset-limits              Reset rate-limit window counters & cooldown (TTY only)
 
 Options:
   --cookies <path>          Path to cookies JSON file (or set X_COOKIES_PATH)
+  --encrypt                 Encrypt cookies into ~/.x-use/cookies.vault using X_USE_KEY
   --proxy <url>             Proxy URL (or set X_PROXY_URL / SOCKS_PROXY)
+  --strict                  Halt immediately instead of waiting if pacing gap is not met
   --json                    Output structured JSON for AI agents
   -h, --help                Show help
 `);
@@ -35,11 +56,13 @@ Options:
 
 function parseArgs(argv) {
   const positionals = [];
-  const flags = { json: false, cookies: null, proxy: null };
+  const flags = { json: false, cookies: null, proxy: null, encrypt: false, strict: false };
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--json') flags.json = true;
+    else if (arg === '--encrypt') flags.encrypt = true;
+    else if (arg === '--strict') flags.strict = true;
     else if (arg === '--cookies' && argv[i + 1]) flags.cookies = argv[++i];
     else if (arg === '--proxy' && argv[i + 1]) flags.proxy = argv[++i];
     else if (arg === '-h' || arg === '--help') flags.help = true;
@@ -65,7 +88,7 @@ async function runInteractiveMenu(baseFlags) {
           ? 'token: configured'
           : 'not configured';
 
-      console.log(`Auth: [${authStatus}] | Proxy: [${saved.proxyUrl || baseFlags.proxy || 'auto/direct'}]`);
+      console.log(`Auth: [${authStatus}] | Proxy: [${sanitizeProxyUrl(saved.proxyUrl || baseFlags.proxy) || 'auto/direct'}]`);
       console.log(`
   1) check    — Verify X session
   2) profile  — Lookup user profile
@@ -87,7 +110,7 @@ async function runInteractiveMenu(baseFlags) {
       try {
         if (choice === '1' || choice === 'check') {
           await client.init();
-          console.log('✓ Connected:', { txReady: Boolean(client.transaction), proxy: client.proxyUrl || 'direct' });
+          console.log('✓ Connected:', { txReady: Boolean(client.transaction), proxy: sanitizeProxyUrl(client.proxyUrl) || 'direct' });
         } else if (choice === '2' || choice === 'profile') {
           const u = await ask(rl, 'Username (without @): ');
           const res = await client.getProfile(u);
@@ -162,7 +185,16 @@ async function runInteractiveMenu(baseFlags) {
 
   if (command === 'setup' || command === 'auth') {
     const updates = {};
-    if (flags.cookies) updates.cookiesPath = path.resolve(flags.cookies);
+    if (flags.cookies && flags.encrypt) {
+      const vaultPath = encryptCookiesVault(flags.cookies, process.env.X_USE_KEY);
+      updates.vaultPath = vaultPath;
+      updates.cookiesPath = null;
+    } else if (flags.cookies) {
+      updates.cookiesPath = path.resolve(flags.cookies);
+      if (isInsecureFileMode(updates.cookiesPath) && !flags.json) {
+        console.warn(`⚠ Warning: ${updates.cookiesPath} has group/world permissions. Run: chmod 600 "${updates.cookiesPath}"`);
+      }
+    }
     if (flags.proxy) updates.proxyUrl = flags.proxy;
     if (Object.keys(updates).length === 0) {
       console.log('Usage: xuse setup --cookies ./cookies.json [--proxy socks5h://127.0.0.1:10808]');
@@ -170,24 +202,62 @@ async function runInteractiveMenu(baseFlags) {
     }
     const savedTo = saveConfig(updates);
     if (flags.json) {
-      console.log(JSON.stringify({ ok: true, data: { configPath: savedTo, ...updates } }, null, 2));
+      const safeUpdates = {
+        ...updates,
+        ...(updates.proxyUrl ? { proxyUrl: sanitizeProxyUrl(updates.proxyUrl) } : {})
+      };
+      console.log(JSON.stringify({ ok: true, data: { configPath: savedTo, ...safeUpdates } }, null, 2));
     } else {
       console.log('✓ Configuration saved to', savedTo);
     }
     process.exit(0);
   }
 
-  const client = new XUseClient({
-    ...(flags.cookies ? { cookiesPath: flags.cookies } : {}),
-    ...(flags.proxy ? { proxyUrl: flags.proxy } : {})
-  });
+  const strictRateLimit = flags.strict || flags.json || !process.stdin.isTTY;
 
   try {
+    if (command === 'breaker') {
+      const result = new CircuitBreaker().getStatus();
+      console.log(flags.json ? JSON.stringify({ ok: true, data: result }, null, 2) : result);
+      return;
+    }
+    if (command === 'reset-breaker') {
+      if (!process.stdin.isTTY || flags.json) {
+        throw new Error(
+          'Refusing to reset circuit breaker in non-interactive or --json mode. A human must run "xuse reset-breaker" in a terminal.'
+        );
+      }
+      const result = new CircuitBreaker().reset();
+      console.log(result);
+      return;
+    }
+    if (command === 'limits') {
+      const result = new RateLimiter().getStatus();
+      console.log(flags.json ? JSON.stringify({ ok: true, data: result }, null, 2) : result);
+      return;
+    }
+    if (command === 'reset-limits') {
+      if (!process.stdin.isTTY || flags.json) {
+        throw new Error(
+          'Refusing to reset rate limits in non-interactive or --json mode. A human must run "xuse reset-limits" in a terminal.'
+        );
+      }
+      const result = new RateLimiter().reset();
+      console.log(result);
+      return;
+    }
+
+    const client = new XUseClient({
+      ...(flags.cookies ? { cookiesPath: flags.cookies } : {}),
+      ...(flags.proxy ? { proxyUrl: flags.proxy } : {}),
+      ...(strictRateLimit ? { strictRateLimit: true } : {})
+    });
+
     let result;
     switch (command) {
       case 'check':
         await client.init();
-        result = { ok: true, txReady: Boolean(client.transaction), proxy: client.proxyUrl || 'direct' };
+        result = { ok: true, txReady: Boolean(client.transaction), proxy: sanitizeProxyUrl(client.proxyUrl) || 'direct' };
         break;
       case 'profile':
         if (!args[0]) throw new Error('Missing <username>');
@@ -227,25 +297,83 @@ async function runInteractiveMenu(baseFlags) {
         if (!args[0]) throw new Error('Missing <username>');
         result = await client.getUserTweets(args[0], Number(args[1]) || 20);
         break;
+      case 'reposts':
+        if (!args[0]) throw new Error('Missing <username>');
+        result = await client.getUserReposts(args[0], Number(args[1]) || 20);
+        break;
       case 'search':
         if (!args[0]) throw new Error('Missing <query>');
         result = await client.searchTweets(args[0], Number(args[1]) || 20);
+        break;
+      case 'home':
+        result = await client.getHomeTimeline(Number(args[0]) || 20);
+        break;
+      case 'explore':
+        result = await client.getExplore(Number(args[0]) || 20);
+        break;
+      case 'read':
+        if (!args[0]) throw new Error('Missing <tweetId>');
+        result = await client.getTweet(args[0]);
+        break;
+      case 'notifications':
+        result = await client.getNotifications(Number(args[0]) || 40);
+        break;
+      case 'badges':
+        result = await client.getBadgeCounts();
+        break;
+      case 'suggest':
+        if (!args[0]) throw new Error('Missing <query>');
+        result = await client.searchTypeahead(args.join(' '));
         break;
       default:
         throw new Error(`Unknown command: ${command}`);
     }
 
     if (flags.json) {
-      console.log(JSON.stringify({ ok: true, data: result }, null, 2));
+      const out = {
+        ok: true,
+        ...(client.lastEvent ? { event: client.lastEvent } : {}),
+        data: result
+      };
+      console.log(JSON.stringify(out, null, 2));
     } else {
       console.log(result);
     }
   } catch (err) {
     if (flags.json) {
-      console.error(JSON.stringify({ ok: false, error: err.message }, null, 2));
+      const payload = {
+        ok: false,
+        error: err.message,
+        ...(err.code ? { code: err.code } : {}),
+        ...(err.halt ? { halt: true, actionRequired: 'STOP_AND_NOTIFY_USER' } : {}),
+        ...(err.code === 'CIRCUIT_BREAKER_TRIPPED' || err.circuitBreakerTripped
+          ? { circuitBreakerTripped: true }
+          : {}),
+        ...(err.code === 'AMBIGUOUS_WRITE_RESULT' || err.ambiguousWrite
+          ? { ambiguousWrite: true }
+          : {}),
+        ...(err.code === 'RATE_LIMIT_EXCEEDED'
+          ? { rateLimitExceeded: true, retryAfterSeconds: err.retryAfterSeconds }
+          : {}),
+        ...(err.code === 'PACING_WAIT_REQUIRED'
+          ? { halt: false, pacingWait: true, waitSeconds: err.waitSeconds }
+          : {}),
+        ...(Array.isArray(err.published)
+          ? { published: err.published.map(({ raw, ...rest }) => rest) }
+          : {})
+      };
+      console.error(JSON.stringify(payload, null, 2));
     } else {
       console.error('Error:', err.message);
     }
-    process.exit(1);
+    const exitCode =
+      err.code === 'PACING_WAIT_REQUIRED'
+        ? 4
+        : err.code === 'RATE_LIMIT_EXCEEDED'
+          ? 2
+          : err.code === 'CIRCUIT_BREAKER_TRIPPED'
+            ? 3
+            : 1;
+    process.exit(exitCode);
   }
 })();

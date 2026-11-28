@@ -1,9 +1,11 @@
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
 const CONFIG_DIR = path.join(os.homedir(), '.x-use');
 const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
+const VAULT_PATH = path.join(CONFIG_DIR, 'cookies.vault');
 
 /**
  * Load saved user configuration from ~/.x-use/config.json if present.
@@ -18,20 +20,44 @@ function loadSavedConfig() {
 }
 
 /**
+ * Atomically write a sensitive file with owner-only (0600) permissions.
+ */
+function _writePrivateFile(targetPath, contents) {
+  const dir = path.dirname(targetPath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
+  const tmpPath = `${targetPath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
+  fs.writeFileSync(tmpPath, contents, { mode: 0o600 });
+  fs.chmodSync(tmpPath, 0o600);
+  fs.renameSync(tmpPath, targetPath);
+  return targetPath;
+}
+
+/**
  * Persist user configuration to ~/.x-use/config.json with owner-only permissions.
  */
 function saveConfig(newConfig) {
   const current = loadSavedConfig();
   const merged = { ...current, ...newConfig };
-  if (!fs.existsSync(CONFIG_DIR)) {
-    fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
-  }
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(merged, null, 2), { mode: 0o600 });
-  return CONFIG_PATH;
+  return _writePrivateFile(CONFIG_PATH, JSON.stringify(merged, null, 2));
+}
+
+function isAllowedXDomain(domain) {
+  if (!domain) return true;
+  const clean = String(domain).toLowerCase().trim().replace(/^\.+/, '');
+  return (
+    clean === 'x.com' ||
+    clean.endsWith('.x.com') ||
+    clean === 'twitter.com' ||
+    clean.endsWith('.twitter.com')
+  );
 }
 
 /**
  * Resolve X authentication credentials from cookies array, cookies file, env vars, or saved config.
+ * Filters cookie entries to X/Twitter domains when `domain` is specified, while permitting
+ * domain-less cookie exports (e.g. minimal `[{ name, value }]` files).
  * @param {Object} config
  * @returns {{ cookieHeader: string, ct0: string, authToken: string }}
  */
@@ -48,14 +74,23 @@ function resolveCredentials(config) {
     cookies = JSON.parse(fs.readFileSync(resolved, 'utf8'));
   }
 
+  const vaultKey = config.vaultKey || process.env.X_USE_KEY || '';
+  const vaultPath = config.vaultPath || VAULT_PATH;
+  if (!cookies && vaultKey && fs.existsSync(vaultPath)) {
+    cookies = decryptCookiesVault(vaultKey, vaultPath);
+  }
+
   let cookieHeader = '';
   let ct0 = config.ct0 || saved.ct0 || '';
   let authToken = config.authToken || saved.authToken || '';
 
   if (Array.isArray(cookies) && cookies.length > 0) {
-    cookieHeader = cookies.map((c) => `${c.name}=${c.value}`).join('; ');
-    const ct0Cookie = cookies.find((c) => c.name === 'ct0');
-    const authCookie = cookies.find((c) => c.name === 'auth_token');
+    const validCookies = cookies.filter(
+      (c) => c && c.name && c.value !== undefined && isAllowedXDomain(c.domain)
+    );
+    cookieHeader = validCookies.map((c) => `${c.name}=${c.value}`).join('; ');
+    const ct0Cookie = validCookies.find((c) => c.name === 'ct0');
+    const authCookie = validCookies.find((c) => c.name === 'auth_token');
     ct0 = ct0Cookie ? ct0Cookie.value : ct0;
     authToken = authCookie ? authCookie.value : authToken;
   } else if (authToken && ct0) {
@@ -66,6 +101,9 @@ function resolveCredentials(config) {
     );
   }
 
+  if (!authToken) {
+    throw new Error('Missing `auth_token` session cookie in cookies or environment.');
+  }
   if (!ct0) {
     throw new Error('Missing `ct0` CSRF token in cookies or environment.');
   }
@@ -73,10 +111,67 @@ function resolveCredentials(config) {
   return { cookieHeader, ct0, authToken };
 }
 
+/**
+ * Encrypt a browser cookies JSON file into ~/.x-use/cookies.vault using AES-256-GCM.
+ */
+function encryptCookiesVault(cookiesPath, passphrase, vaultPath = VAULT_PATH) {
+  if (!passphrase) throw new Error('Passphrase (or X_USE_KEY) is required to encrypt cookies.');
+  const raw = fs.readFileSync(path.resolve(cookiesPath), 'utf8');
+  JSON.parse(raw); // validate JSON before storing
+
+  const salt = crypto.randomBytes(16);
+  const iv = crypto.randomBytes(12);
+  const key = crypto.scryptSync(passphrase, salt, 32);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([cipher.update(raw, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+
+  const payload = JSON.stringify({
+    alg: 'aes-256-gcm',
+    salt: salt.toString('hex'),
+    iv: iv.toString('hex'),
+    tag: tag.toString('hex'),
+    data: encrypted.toString('hex')
+  });
+  return _writePrivateFile(vaultPath, payload);
+}
+
+/**
+ * Decrypt ~/.x-use/cookies.vault using AES-256-GCM.
+ */
+function decryptCookiesVault(passphrase, vaultPath = VAULT_PATH) {
+  if (!passphrase) throw new Error('Passphrase (or X_USE_KEY) is required to decrypt cookies vault.');
+  const blob = JSON.parse(fs.readFileSync(vaultPath, 'utf8'));
+  const key = crypto.scryptSync(passphrase, Buffer.from(blob.salt, 'hex'), 32);
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(blob.iv, 'hex'));
+  decipher.setAuthTag(Buffer.from(blob.tag, 'hex'));
+  const decrypted = Buffer.concat([
+    decipher.update(Buffer.from(blob.data, 'hex')),
+    decipher.final()
+  ]).toString('utf8');
+  return JSON.parse(decrypted);
+}
+
+/**
+ * Check if a cookie file has group/world permissions on POSIX systems.
+ */
+function isInsecureFileMode(filePath) {
+  try {
+    const stat = fs.statSync(path.resolve(filePath));
+    return (stat.mode & 0o077) !== 0;
+  } catch (_) {
+    return false;
+  }
+}
+
 module.exports = {
   CONFIG_DIR,
   CONFIG_PATH,
+  VAULT_PATH,
   loadSavedConfig,
   saveConfig,
-  resolveCredentials
+  resolveCredentials,
+  encryptCookiesVault,
+  decryptCookiesVault,
+  isInsecureFileMode
 };
