@@ -32,8 +32,21 @@ function saveConfig(newConfig) {
   return CONFIG_PATH;
 }
 
+function isAllowedXDomain(domain) {
+  if (!domain) return true;
+  const clean = String(domain).toLowerCase().trim().replace(/^\.+/, '');
+  return (
+    clean === 'x.com' ||
+    clean.endsWith('.x.com') ||
+    clean === 'twitter.com' ||
+    clean.endsWith('.twitter.com')
+  );
+}
+
 /**
  * Resolve X authentication credentials from cookies array, cookies file, env vars, or saved config.
+ * Filters cookie entries to X/Twitter domains when `domain` is specified, while permitting
+ * domain-less cookie exports (e.g. minimal `[{ name, value }]` files).
  * @param {Object} config
  * @returns {{ cookieHeader: string, ct0: string, authToken: string }}
  */
@@ -61,9 +74,12 @@ function resolveCredentials(config) {
   let authToken = config.authToken || saved.authToken || '';
 
   if (Array.isArray(cookies) && cookies.length > 0) {
-    cookieHeader = cookies.map((c) => `${c.name}=${c.value}`).join('; ');
-    const ct0Cookie = cookies.find((c) => c.name === 'ct0');
-    const authCookie = cookies.find((c) => c.name === 'auth_token');
+    const validCookies = cookies.filter(
+      (c) => c && c.name && c.value !== undefined && isAllowedXDomain(c.domain)
+    );
+    cookieHeader = validCookies.map((c) => `${c.name}=${c.value}`).join('; ');
+    const ct0Cookie = validCookies.find((c) => c.name === 'ct0');
+    const authCookie = validCookies.find((c) => c.name === 'auth_token');
     ct0 = ct0Cookie ? ct0Cookie.value : ct0;
     authToken = authCookie ? authCookie.value : authToken;
   } else if (authToken && ct0) {
@@ -74,6 +90,9 @@ function resolveCredentials(config) {
     );
   }
 
+  if (!authToken) {
+    throw new Error('Missing `auth_token` session cookie in cookies or environment.');
+  }
   if (!ct0) {
     throw new Error('Missing `ct0` CSRF token in cookies or environment.');
   }

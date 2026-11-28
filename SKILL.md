@@ -27,12 +27,14 @@ Optional proxy:
 - **Persistent Rate Limiter (`~/.x-use/rate_limit.json`):** Every request is logged on disk (`0600`) with an incrementing `eventId` and ISO timestamp.
   - Window caps: max **20 reads / 15m** (`3–6s` jittered gap), max **5 writes / 60m** (`15–30s` jittered gap).
   - If given multiple tasks (e.g., 10 tasks), **execute them discretely with delays**, never in a parallel burst.
-  - In `--json` or non-TTY mode, `--strict` is active by default so pacing gaps return `pacingWait: true` (`halt: false`, `waitSeconds`) instead of blocking the process.
+  - In `--json` or non-TTY mode, `--strict` is active by default so pacing gaps exit with code **4** and `{"ok":false,"halt":false,"pacingWait":true,"waitSeconds":N}` instead of blocking. If you receive `pacingWait: true`, wait `waitSeconds` seconds and retry the exact same command **once at most**.
+  - Thread duration note: `xuse thread` spaces writes by 15–30s internally to complete the confirmed thread cleanly, so multi-tweet threads can take a few minutes (allow a higher command timeout instead of assuming it hung).
   - Check remaining budget anytime with `xuse limits --json`.
-- **Safety Circuit Breaker (`~/.x-use/circuit_breaker.json`):** Trips immediately on `401`/`403`/`429`, or after **2 consecutive errors**, blocking all further requests.
-- **Agent Halt Rule:**
+- **Safety Circuit Breaker (`~/.x-use/circuit_breaker.json`):** Trips immediately on `401`/`403`/`429` or account-restriction GraphQL errors, or after **2 consecutive errors**, blocking all further requests.
+- **Exit Codes & Agent Halt Rule:**
+  - `0` = success, `1` = general error, `2` = rate-limit quota exhausted (`halt: true`), `3` = circuit breaker tripped (`halt: true`), `4` = short pacing wait (`halt: false`, `pacingWait: true`).
   - If `--json` returns `"halt": true` (`"circuitBreakerTripped": true` or `"rateLimitExceeded": true`), you MUST **STOP immediately**, NEVER retry or bypass, and report the exact `error` (and `retryAfterSeconds` if present) to the user.
-  - **NEVER** inspect, edit, or delete `~/.x-use/` state files, and **NEVER** attempt to reset the circuit breaker. Only a human user can reset the breaker from an interactive terminal.
+  - **NEVER** inspect, edit, or delete `~/.x-use/` state files, and **NEVER** attempt to reset the circuit breaker or rate limits. Only a human user can reset them from an interactive terminal.
   - **Write Confirmation Rule:** Read operations are safe for autonomous execution; write operations (`tweet`, `reply`, `thread`, `like`, `retweet`, `delete`) MUST only be executed with explicit user confirmation.
   ```bash
   xuse limits --json

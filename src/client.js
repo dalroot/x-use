@@ -25,12 +25,13 @@ class XUseClient {
   constructor(options = {}) {
     const saved = loadSavedConfig();
     const rawProxy =
-      options.proxyUrl ||
-      process.env.X_PROXY_URL ||
-      process.env.SOCKS_PROXY ||
-      process.env.HTTPS_PROXY ||
-      saved.proxyUrl ||
-      '';
+      options.proxyUrl !== undefined
+        ? options.proxyUrl || ''
+        : process.env.X_PROXY_URL ||
+          process.env.SOCKS_PROXY ||
+          process.env.HTTPS_PROXY ||
+          saved.proxyUrl ||
+          '';
 
     const { proxyUrl, agent } = createProxyAgent(rawProxy);
     this.proxyUrl = proxyUrl;
@@ -77,21 +78,14 @@ class XUseClient {
   async _httpRequest(options, postData = null) {
     this.circuitBreaker.assertReady();
     const opName = options.operationName || String(options.path || '').split('/').pop().split('?')[0] || options.method || 'GET';
-    this.lastEvent = await this.rateLimiter.acquire(options.method || 'GET', opName);
+    this.lastEvent = await this.rateLimiter.acquire(options.method || 'GET', opName, {
+      isInit: Boolean(options.isInit),
+      bypassPacing: Boolean(options.bypassPacing)
+    });
     try {
       return await httpRequest(options, postData, this.agent);
     } catch (err) {
-      const state = this.circuitBreaker.recordFailure(err.message);
-      if (state.tripped) {
-        const trippedErr = new Error(
-          `${err.message} | SAFETY CIRCUIT BREAKER TRIPPED (${state.consecutiveErrors} consecutive errors). STOP and notify the user.`
-        );
-        trippedErr.code = 'CIRCUIT_BREAKER_TRIPPED';
-        trippedErr.halt = true;
-        trippedErr.lastError = err.message;
-        throw trippedErr;
-      }
-      throw err;
+      this._recordFailureWithStatus(err, null, null);
     }
   }
 
@@ -131,36 +125,50 @@ class XUseClient {
     );
   }
 
+  _isSensitiveGraphQLError(err) {
+    if (!Array.isArray(err?.graphqlErrors)) return false;
+    const sensitiveCodes = new Set([32, 64, 88, 141, 326]);
+    return err.graphqlErrors.some(
+      (e) =>
+        sensitiveCodes.has(Number(e?.code)) ||
+        /suspended|locked|temporarily restricted|rate limit|could not authenticate/i.test(String(e?.message || ''))
+    );
+  }
+
+  _recordFailureWithStatus(err, status, headers) {
+    const isImmediate =
+      status === 401 || status === 403 || status === 429 || this._isSensitiveGraphQLError(err);
+    if (status === 429 && headers) {
+      const retryAfter = Number(headers['retry-after']);
+      const resetAt = Number(headers['x-rate-limit-reset']);
+      let cooldownSec = 60;
+      if (Number.isFinite(retryAfter) && retryAfter > 0) {
+        cooldownSec = retryAfter;
+      } else if (Number.isFinite(resetAt) && resetAt > 0) {
+        cooldownSec = Math.max(1, resetAt - Math.floor(Date.now() / 1000));
+      }
+      this.rateLimiter.recordCooldownSync(cooldownSec);
+    }
+    const state = this.circuitBreaker.recordFailure(err.message, { immediate: isImmediate });
+    if (state.tripped) {
+      const trippedErr = new Error(
+        `${err.message} | SAFETY CIRCUIT BREAKER TRIPPED (${state.consecutiveErrors} consecutive errors). STOP and notify the user.`
+      );
+      trippedErr.code = 'CIRCUIT_BREAKER_TRIPPED';
+      trippedErr.halt = true;
+      trippedErr.lastError = err.message;
+      throw trippedErr;
+    }
+    throw err;
+  }
+
   _parseGraphQL(res, actionName) {
     try {
       const parsed = parseGraphQLResponse(res, actionName);
       this.circuitBreaker.recordSuccess();
       return parsed;
     } catch (err) {
-      const status = res?.statusCode;
-      const isImmediate = status === 401 || status === 403 || status === 429;
-      if (status === 429 && res?.headers) {
-        const retryAfter = Number(res.headers['retry-after']);
-        const resetAt = Number(res.headers['x-rate-limit-reset']);
-        let cooldownSec = 60;
-        if (Number.isFinite(retryAfter) && retryAfter > 0) {
-          cooldownSec = retryAfter;
-        } else if (Number.isFinite(resetAt) && resetAt > 0) {
-          cooldownSec = Math.max(1, resetAt - Math.floor(Date.now() / 1000));
-        }
-        this.rateLimiter.recordCooldown(cooldownSec).catch(() => {});
-      }
-      const state = this.circuitBreaker.recordFailure(err.message, { immediate: isImmediate });
-      if (state.tripped) {
-        const trippedErr = new Error(
-          `${err.message} | SAFETY CIRCUIT BREAKER TRIPPED (${state.consecutiveErrors} consecutive errors). STOP and notify the user.`
-        );
-        trippedErr.code = 'CIRCUIT_BREAKER_TRIPPED';
-        trippedErr.halt = true;
-        trippedErr.lastError = err.message;
-        throw trippedErr;
-      }
-      throw err;
+      this._recordFailureWithStatus(err, res?.statusCode, res?.headers);
     }
   }
 
@@ -174,6 +182,7 @@ class XUseClient {
 
   /**
    * Reset the safety circuit breaker after inspecting and fixing the cause of errors.
+   * @humanOnly Intended strictly for manual human recovery — never call autonomously from AI agents.
    */
   resetCircuitBreaker() {
     return this.circuitBreaker.reset();
@@ -196,6 +205,9 @@ class XUseClient {
       hostname: 'x.com',
       path: '/home',
       method: 'GET',
+      operationName: 'InitHome',
+      isInit: true,
+      bypassPacing: true,
       headers: {
         cookie: this.cookieHeader,
         'user-agent': this.userAgent,
@@ -211,6 +223,9 @@ class XUseClient {
         hostname: 'x.com',
         path: loc,
         method: 'GET',
+        operationName: 'InitHomeRedirect',
+        isInit: true,
+        bypassPacing: true,
         headers: {
           cookie: this.cookieHeader,
           'user-agent': this.userAgent,
@@ -220,7 +235,8 @@ class XUseClient {
     }
 
     if (resHome.statusCode !== 200) {
-      throw new Error(`Failed to load x.com shell: status ${resHome.statusCode}`);
+      const initErr = new Error(`Failed to load x.com shell: status ${resHome.statusCode}`);
+      this._recordFailureWithStatus(initErr, resHome.statusCode, resHome.headers);
     }
 
     try {
@@ -234,7 +250,7 @@ class XUseClient {
     }
   }
 
-  async _getHeaders(method, apiPath, skipInit = false, targetHost = 'x.com') {
+  async _getHeaders(method, apiPath, skipInit = false) {
     if (skipInit) {
       this._ensureAuth();
     } else if (!this.transaction && !this._transactionInitFailed) {

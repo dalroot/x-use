@@ -13,6 +13,7 @@ const MAX_READ_GAP_MS = 6000;
 const MIN_WRITE_GAP_MS = 15000;
 const MAX_WRITE_GAP_MS = 30000;
 const LOCK_STALE_MS = 30000;
+const CLOCK_ROLLBACK_TOLERANCE_MS = 2 * 60 * 1000; // 2 minutes NTP skew tolerance
 
 const inProcessQueues = new Map();
 
@@ -110,7 +111,7 @@ class RateLimiter {
     }
 
     const lastTsMs = Number(parsed.lastTsMs) || parsed.events.reduce((m, e) => Math.max(m, Number(e.tsMs) || 0), 0);
-    if (lastTsMs > 0 && now < lastTsMs) {
+    if (lastTsMs > 0 && lastTsMs - now > CLOCK_ROLLBACK_TOLERANCE_MS) {
       throw this._createRateError(
         `System clock rollback detected (now=${new Date(now).toISOString()} < last=${new Date(lastTsMs).toISOString()}). Halting to protect X account.`
       );
@@ -188,15 +189,69 @@ class RateLimiter {
 
   async recordCooldown(seconds) {
     const sec = Math.max(1, Math.ceil(Number(seconds) || 60));
-    return this._withLock(async () => {
-      const now = Date.now();
-      const state = this._load(now);
-      const until = now + sec * 1000;
-      if (until > (state.cooldownUntilMs || 0)) {
-        state.cooldownUntilMs = until;
-        this._save(state);
+    return this._withLock(async () => this._recordCooldownLocked(sec));
+  }
+
+  _recordCooldownLocked(sec) {
+    const now = Date.now();
+    let state;
+    try {
+      state = this._load(now);
+    } catch (_) {
+      state = { lastEventId: 0, lastTsMs: now, cooldownUntilMs: 0, events: [] };
+    }
+    const until = now + sec * 1000;
+    if (until > (state.cooldownUntilMs || 0)) {
+      state.cooldownUntilMs = until;
+      this._save(state);
+    }
+    return state;
+  }
+
+  recordCooldownSync(seconds) {
+    const sec = Math.max(1, Math.ceil(Number(seconds) || 60));
+    const dir = path.dirname(this.filePath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    }
+    const lockPath = `${this.filePath}.lock`;
+    let lockFd = null;
+    try {
+      lockFd = fs.openSync(lockPath, 'wx', 0o600);
+    } catch (_) {
+      // Best-effort atomic write if lock is momentarily held
+    }
+    try {
+      return this._recordCooldownLocked(sec);
+    } finally {
+      if (lockFd !== null) {
+        try {
+          fs.closeSync(lockFd);
+        } catch (_) {}
+        try {
+          fs.unlinkSync(lockPath);
+        } catch (_) {}
       }
-      return state;
+    }
+  }
+
+  /**
+   * Reset cooldown and window history while keeping monotonic lastEventId.
+   * Intended strictly for human operator recovery from an interactive TTY.
+   */
+  reset() {
+    let prevId = 0;
+    try {
+      if (fs.existsSync(this.filePath)) {
+        const parsed = JSON.parse(fs.readFileSync(this.filePath, 'utf8'));
+        prevId = Number(parsed?.lastEventId) || 0;
+      }
+    } catch (_) {}
+    return this._save({
+      lastEventId: prevId,
+      lastTsMs: 0,
+      cooldownUntilMs: 0,
+      events: []
     });
   }
 
@@ -234,12 +289,17 @@ class RateLimiter {
    * Re-validates state after any pacing sleep so concurrent callers cannot burst.
    * @param {'GET'|'POST'|string} method
    * @param {string} [operationName] - Operation identifier only (no URLs or queries).
+   * @param {Object} [acquireOpts]
+   * @param {boolean} [acquireOpts.bypassPacing=false] - Skip pacing gap (still counts toward quota and eventId).
+   * @param {boolean} [acquireOpts.isInit=false] - Mark session init request so primary request is not blocked by it.
    * @returns {Promise<{ eventId: number, timestamp: string, kind: 'read'|'write', waitedMs: number }>}
    */
-  async acquire(method, operationName = '') {
+  async acquire(method, operationName = '', acquireOpts = {}) {
     const kind = String(method || 'GET').toUpperCase() === 'GET' ? 'read' : 'write';
     const windowMs = kind === 'read' ? READ_WINDOW_MS : WRITE_WINDOW_MS;
     const maxAllowed = kind === 'read' ? this.maxReads : this.maxWrites;
+    const bypassPacing = Boolean(acquireOpts.bypassPacing);
+    const isInit = Boolean(acquireOpts.isInit);
     let totalWaitedMs = 0;
 
     while (true) {
@@ -266,7 +326,9 @@ class RateLimiter {
           );
         }
 
-        const lastSame = [...state.events].reverse().find((e) => e.kind === kind);
+        const lastSame = bypassPacing
+          ? null
+          : [...state.events].reverse().find((e) => e.kind === kind && !e.isInit);
         if (lastSame) {
           const targetGap =
             kind === 'read'
@@ -297,6 +359,7 @@ class RateLimiter {
           timestamp,
           tsMs: now,
           kind,
+          ...(isInit ? { isInit: true } : {}),
           target: String(operationName || kind).slice(0, 40)
         });
         this._save(state);

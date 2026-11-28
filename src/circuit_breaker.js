@@ -90,6 +90,11 @@ class CircuitBreaker {
 
   recordSuccess() {
     const state = this._load();
+    // Never allow an in-flight older request to clear an already-tripped breaker;
+    // only explicit human reset() may restore a tripped circuit breaker.
+    if (state.tripped) {
+      return state;
+    }
     return this._save({
       ...state,
       consecutiveErrors: 0,

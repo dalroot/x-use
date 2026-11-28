@@ -213,13 +213,45 @@ async function runInteractiveMenu(baseFlags) {
   }
 
   const strictRateLimit = flags.strict || flags.json || !process.stdin.isTTY;
-  const client = new XUseClient({
-    ...(flags.cookies ? { cookiesPath: flags.cookies } : {}),
-    ...(flags.proxy ? { proxyUrl: flags.proxy } : {}),
-    ...(strictRateLimit ? { strictRateLimit: true } : {})
-  });
 
   try {
+    if (command === 'breaker') {
+      const result = new CircuitBreaker().getStatus();
+      console.log(flags.json ? JSON.stringify({ ok: true, data: result }, null, 2) : result);
+      return;
+    }
+    if (command === 'reset-breaker') {
+      if (!process.stdin.isTTY || flags.json) {
+        throw new Error(
+          'Refusing to reset circuit breaker in non-interactive or --json mode. A human must run "xuse reset-breaker" in a terminal.'
+        );
+      }
+      const result = new CircuitBreaker().reset();
+      console.log(result);
+      return;
+    }
+    if (command === 'limits') {
+      const result = new RateLimiter().getStatus();
+      console.log(flags.json ? JSON.stringify({ ok: true, data: result }, null, 2) : result);
+      return;
+    }
+    if (command === 'reset-limits') {
+      if (!process.stdin.isTTY || flags.json) {
+        throw new Error(
+          'Refusing to reset rate limits in non-interactive or --json mode. A human must run "xuse reset-limits" in a terminal.'
+        );
+      }
+      const result = new RateLimiter().reset();
+      console.log(result);
+      return;
+    }
+
+    const client = new XUseClient({
+      ...(flags.cookies ? { cookiesPath: flags.cookies } : {}),
+      ...(flags.proxy ? { proxyUrl: flags.proxy } : {}),
+      ...(strictRateLimit ? { strictRateLimit: true } : {})
+    });
+
     let result;
     switch (command) {
       case 'check':
@@ -288,20 +320,6 @@ async function runInteractiveMenu(baseFlags) {
       case 'badges':
         result = await client.getBadgeCounts();
         break;
-      case 'breaker':
-        result = new CircuitBreaker().getStatus();
-        break;
-      case 'reset-breaker':
-        if (!process.stdin.isTTY || flags.json) {
-          throw new Error(
-            'Refusing to reset circuit breaker in non-interactive or --json mode. A human must run "xuse reset-breaker" in a terminal.'
-          );
-        }
-        result = new CircuitBreaker().reset();
-        break;
-      case 'limits':
-        result = new RateLimiter().getStatus();
-        break;
       case 'suggest':
         if (!args[0]) throw new Error('Missing <query>');
         result = await client.searchTypeahead(args.join(' '));
@@ -342,11 +360,13 @@ async function runInteractiveMenu(baseFlags) {
       console.error('Error:', err.message);
     }
     const exitCode =
-      err.code === 'RATE_LIMIT_EXCEEDED' || err.code === 'PACING_WAIT_REQUIRED'
-        ? 2
-        : err.code === 'CIRCUIT_BREAKER_TRIPPED'
-          ? 3
-          : 1;
+      err.code === 'PACING_WAIT_REQUIRED'
+        ? 4
+        : err.code === 'RATE_LIMIT_EXCEEDED'
+          ? 2
+          : err.code === 'CIRCUIT_BREAKER_TRIPPED'
+            ? 3
+            : 1;
     process.exit(exitCode);
   }
 })();

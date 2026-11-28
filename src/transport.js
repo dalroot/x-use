@@ -1,19 +1,78 @@
+const http = require('http');
 const https = require('https');
+const tls = require('tls');
 const { SocksProxyAgent } = require('socks-proxy-agent');
 
+const SOCKS_PROTOCOLS = new Set(['socks4:', 'socks4a:', 'socks5:', 'socks5h:']);
+
+class HttpConnectAgent extends https.Agent {
+  constructor(proxyUrl) {
+    super({ keepAlive: false });
+    this.proxy = new URL(proxyUrl);
+  }
+
+  createConnection(options, cb) {
+    const targetPort = Number(options.port) || 443;
+    const authority = `${options.host}:${targetPort}`;
+    const headers = { Host: authority };
+    if (this.proxy.username || this.proxy.password) {
+      const creds = `${decodeURIComponent(this.proxy.username)}:${decodeURIComponent(this.proxy.password)}`;
+      headers['Proxy-Authorization'] = `Basic ${Buffer.from(creds).toString('base64')}`;
+    }
+
+    const req = http.request({
+      host: this.proxy.hostname,
+      port: Number(this.proxy.port) || 8080,
+      method: 'CONNECT',
+      path: authority,
+      headers
+    });
+
+    req.once('connect', (res, socket) => {
+      if (res.statusCode !== 200) {
+        socket.destroy();
+        return cb(new Error(`HTTP proxy CONNECT failed with status ${res.statusCode}`));
+      }
+      const tlsSocket = tls.connect({
+        socket,
+        servername: options.servername || options.host
+      });
+      cb(null, tlsSocket);
+    });
+
+    req.once('error', (err) => cb(err));
+    req.end();
+    return undefined;
+  }
+}
+
 /**
- * Create an optional SOCKS proxy agent and patch global fetch for sub-libraries.
+ * Create an optional SOCKS or HTTP CONNECT proxy agent and patch global fetch for sub-libraries.
  * @param {string} [rawProxy]
- * @returns {{ proxyUrl: string|null, agent: SocksProxyAgent|null }}
+ * @returns {{ proxyUrl: string|null, agent: https.Agent|SocksProxyAgent|null }}
  */
 function createProxyAgent(rawProxy) {
   if (!rawProxy) {
     return { proxyUrl: null, agent: null };
   }
-  const proxyUrl = rawProxy.startsWith('http://')
-    ? rawProxy.replace(/^http:\/\//, 'socks5h://')
-    : rawProxy;
-  const agent = new SocksProxyAgent(proxyUrl);
+  let parsed;
+  try {
+    parsed = new URL(rawProxy);
+  } catch (_) {
+    throw new Error(`Invalid proxy URL: ${sanitizeProxyUrl(rawProxy)}`);
+  }
+
+  let agent;
+  if (SOCKS_PROTOCOLS.has(parsed.protocol)) {
+    agent = new SocksProxyAgent(rawProxy);
+  } else if (parsed.protocol === 'http:') {
+    agent = new HttpConnectAgent(rawProxy);
+  } else {
+    throw new Error(
+      `Unsupported proxy protocol "${parsed.protocol}". Use socks5h://, socks5://, socks4://, or http://.`
+    );
+  }
+  const proxyUrl = rawProxy;
 
   globalThis.fetch = function (url, opts = {}) {
     return new Promise((resolve, reject) => {
@@ -111,7 +170,9 @@ function parseGraphQLResponse(res, actionName) {
   }
   const data = JSON.parse(res.body);
   if (data.errors && data.errors.length > 0) {
-    throw new Error(`${actionName} GraphQL error: ${data.errors.map((e) => e.message).join(' | ')}`);
+    const err = new Error(`${actionName} GraphQL error: ${data.errors.map((e) => e.message).join(' | ')}`);
+    err.graphqlErrors = data.errors;
+    throw err;
   }
   return data;
 }

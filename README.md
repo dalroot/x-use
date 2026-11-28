@@ -8,7 +8,7 @@
 
 **Browserless X (Twitter) CLI & Node.js SDK built for AI Agents (`agent-x-use`)**
 
-[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18.0.0-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20.19.0-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org/)
 [![Browserless](https://img.shields.io/badge/Runtime-Pure%20HTTPS%20%2F%20No%20Browser-0A66C2?style=flat-square)](https://x.com)
 [![Agent Ready](https://img.shields.io/badge/AI%20Agents-JSON%20CLI%20%2B%20SKILL.md-6E56CF?style=flat-square)](./SKILL.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-F59E0B?style=flat-square)](./package.json)

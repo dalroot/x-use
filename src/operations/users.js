@@ -65,26 +65,29 @@ function extractTweetsFromInstructions(instructions) {
 
 async function _fetchApiGraphQL(client, queryId, opName, variables, actionName) {
   const apiPath = `/graphql/${queryId}/${opName}`;
-  const headers = await client._getHeaders('GET', apiPath, true, 'api.x.com');
+  const headers = await client._getHeaders('GET', apiPath, true);
   const fullPath = `${apiPath}?variables=${encodeURIComponent(JSON.stringify(variables))}`;
-  const res = await client._getApiGraphQL(fullPath, headers);
+  const res = await client._getApiGraphQL(fullPath, headers, opName);
   return client._parseGraphQL(res, actionName);
 }
 
 async function getProfile(client, screenName) {
   const cleanName = String(screenName).replace(/^@/, '');
-  const queryId = client.queryIds.UserByScreenName;
-  const apiPath = `/i/api/graphql/${queryId}/UserByScreenName`;
-  const headers = await client._getHeaders('GET', apiPath);
+  const queryId = client.queryIds.UserByScreenNameWeb || client.queryIds.UserByScreenName;
+  const data = await _fetchApiGraphQL(
+    client,
+    queryId,
+    'UserByScreenName',
+    {
+      screenName: cleanName,
+      withIdentity: true,
+      __relay_internal__pv__xclientsfeaturesappviewercansendmoneyrelayprovider: false,
+      __relay_internal__pv__xclientsfeaturesappviewerisloggedinrelayprovider: true
+    },
+    'getProfile'
+  );
 
-  const variables = JSON.stringify({ screen_name: cleanName, withSafetyModeUserFields: true });
-  const features = JSON.stringify(PROFILE_READ_FEATURES);
-
-  const fullPath = `${apiPath}?variables=${encodeURIComponent(variables)}&features=${encodeURIComponent(features)}`;
-  const res = await client._getGraphQL(fullPath, headers);
-  const data = client._parseGraphQL(res, 'getProfile');
-
-  const result = data.data?.user?.result;
+  const result = data.data?.user_result_by_screen_name?.result || data.data?.user?.result;
   return {
     id: result?.rest_id,
     name: result?.core?.name,
@@ -96,8 +99,8 @@ async function getProfile(client, screenName) {
     mediaCount: result?.tweet_counts?.media_tweets,
     avatar: result?.avatar?.image_url,
     banner: result?.banner?.image_url,
-    isBlueVerified: result?.is_blue_verified,
-    website: result?.website?.url,
+    isBlueVerified: result?.verification?.is_blue_verified ?? result?.is_blue_verified,
+    website: result?.profile_bio?.entities?.url?.urls?.[0]?.expanded_url || result?.website?.url,
     raw: result
   };
 }
