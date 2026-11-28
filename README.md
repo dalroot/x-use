@@ -186,8 +186,8 @@ Every request from both the CLI and the SDK goes through persistent guards store
 
 | Guard | Rule | What happens |
 |---|---|---|
-| **Read cap** | Max 20 requests / 15 min | Blocked with `halt: true`, exit code `2` |
-| **Write cap** | Max 5 requests / 60 min | Blocked with `halt: true`, exit code `2` |
+| **Read cap** | Max 50 requests / 15 min | Blocked with `halt: true`, exit code `2` |
+| **Write cap** | Max 15 requests / 60 min | Blocked with `halt: true`, exit code `2` |
 | **Read pacing** | 3–6 s jittered gap between reads | Sleeps interactively; returns `pacingWait: true` (`halt: false`, exit `4`) in `--strict`/`--json`/non-TTY |
 | **Write pacing** | 15–30 s jittered gap between writes | Sleeps interactively; returns `pacingWait: true` (`halt: false`, exit `4`) in `--strict`/`--json`/non-TTY |
 | **Circuit breaker** | Immediate trip on `401`/`403`/`429` (plus server `retry-after` cooldown) or account-restriction GraphQL errors; or 2 consecutive errors | Blocked with `halt: true`, exit code `3`, until a human runs `xuse reset-breaker` (cannot be cleared by late `recordSuccess()`) |
@@ -232,7 +232,7 @@ Every request records an incrementing **`eventId`**, an **ISO-8601 UTC timestamp
 ```json
 {
   "ok": false,
-  "error": "Safety rate limit reached (5/5 write requests in window, lastEventId=#42). Halting to protect X account. Retry after 420s.",
+  "error": "Safety rate limit reached (15/15 write requests in window, lastEventId=#42). Halting to protect X account. Retry after 420s.",
   "halt": true,
   "actionRequired": "STOP_AND_NOTIFY_USER",
   "rateLimitExceeded": true,

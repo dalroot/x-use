@@ -504,10 +504,16 @@ https.request = (opts, cb) => {
   fs.writeFileSync(
     rlPath,
     JSON.stringify({
-      lastEventId: 3,
+      lastEventId: 13,
       lastTsMs: now,
       cooldownUntilMs: 0,
-      events: [1, 2, 3].map((id) => ({ eventId: id, timestamp: new Date(now).toISOString(), tsMs: now, kind: 'write', target: 'CreateTweet' }))
+      events: Array.from({ length: 13 }, (_, idx) => idx + 1).map((id) => ({
+        eventId: id,
+        timestamp: new Date(now).toISOString(),
+        tsMs: now,
+        kind: 'write',
+        target: 'CreateTweet'
+      }))
     })
   );
   const threadClient = new XUseClient({

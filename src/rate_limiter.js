@@ -6,8 +6,8 @@ const DEFAULT_RATE_LIMIT_PATH = path.join(os.homedir(), '.x-use', 'rate_limit.js
 
 const READ_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 const WRITE_WINDOW_MS = 60 * 60 * 1000; // 60 minutes
-const DEFAULT_MAX_READS = 20;
-const DEFAULT_MAX_WRITES = 5;
+const DEFAULT_MAX_READS = 50;
+const DEFAULT_MAX_WRITES = 15;
 const MIN_READ_GAP_MS = 3000;
 const MAX_READ_GAP_MS = 6000;
 const MIN_WRITE_GAP_MS = 15000;
@@ -34,8 +34,8 @@ class RateLimiter {
   /**
    * @param {Object} [options]
    * @param {string} [options.filePath] - Path to persist rate limit ledger.
-   * @param {number} [options.maxReads=20] - Max read requests per 15-minute window (clamped <= 20).
-   * @param {number} [options.maxWrites=5] - Max write requests per 60-minute window (clamped <= 5).
+   * @param {number} [options.maxReads=50] - Max read requests per 15-minute window (clamped <= 50).
+   * @param {number} [options.maxWrites=15] - Max write requests per 60-minute window (clamped <= 15).
    * @param {boolean} [options.strict=false] - Reject immediately when pacing gap is not met.
    * @param {number} [options.minReadGapMs=3000] - Clamped >= 3000ms.
    * @param {number} [options.maxReadGapMs=6000]

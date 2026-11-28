@@ -25,7 +25,7 @@ Optional proxy:
 ## Safety Circuit Breaker & Rate Limiter (Mandatory)
 
 - **Persistent Rate Limiter (`~/.x-use/rate_limit.json`):** Every request is logged on disk (`0600`) with an incrementing `eventId` and ISO timestamp.
-  - Window caps: max **20 reads / 15m** (`3–6s` jittered gap), max **5 writes / 60m** (`15–30s` jittered gap).
+  - Window caps: max **50 reads / 15m** (`3–6s` jittered gap), max **15 writes / 60m** (`15–30s` jittered gap).
   - If given multiple tasks (e.g., 10 tasks), **execute them discretely with delays**, never in a parallel burst.
   - In `--json` or non-TTY mode, `--strict` is active by default so pacing gaps exit with code **4** and `{"ok":false,"halt":false,"pacingWait":true,"waitSeconds":N}` instead of blocking. If you receive `pacingWait: true`, wait `waitSeconds` seconds and retry the exact same command **once at most**.
   - Thread duration note: `xuse thread` spaces writes by 15–30s internally to complete the confirmed thread cleanly, so multi-tweet threads can take a few minutes (allow a higher command timeout instead of assuming it hung).
