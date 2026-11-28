@@ -1,0 +1,97 @@
+name: Muse Security Audit
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  security-audit:
+    name: Muse Bot Security & Test Audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks Secret Scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Run Offline Test Suite & Audit
+        run: |
+          npm test
+          npm audit --audit-level=high
+
+      - name: Static Dangerous-Pattern & Leak Scan
+        id: scan
+        run: |
+          node - <<'EOF'
+          const fs = require('fs');
+          const { execFileSync } = require('child_process');
+          const files = execFileSync('git', ['ls-files'], { encoding: 'utf8' }).trim().split('\n').filter(Boolean);
+          const rules = [
+            { name: 'private_key', re: /-----BEGIN [A-Z ]*PRIVATE KEY-----/ },
+            { name: 'tls_bypass', re: /rejectUnauthorized\s*:\s*false|NODE_TLS_REJECT_UNAUTHORIZED/ },
+            { name: 'dynamic_eval', re: /\b(eval|Function)\s*\(/ },
+            { name: 'github_token', re: /\b(ghp|gho|ghs|ghu|github_pat)_[A-Za-z0-9_]{20,}/ },
+            { name: 'local_home_path', re: /\/(home|Users)\/[a-zA-Z0-9_-]+\// }
+          ];
+          const hits = [];
+          for (const f of files) {
+            if (/\.(png|svg|jpg)$/i.test(f)) continue;
+            const lines = fs.readFileSync(f, 'utf8').split('\n');
+            lines.forEach((line, idx) => {
+              for (const r of rules) {
+                if (r.re.test(line)) hits.push(`${f}:${idx + 1} [${r.name}]`);
+              }
+            });
+          }
+          const summary = [
+            '### Muse Security Audit Report',
+            '',
+            `- **Static leak/pattern scan:** ${files.length} tracked files scanned, **${hits.length} hits**`,
+            '- **Offline tests (`npm test`):** Passed',
+            '- **Dependency audit (`npm audit --audit-level=high`):** Passed',
+            '- **Secret scan (`Gitleaks`):** Passed'
+          ];
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary.join('\n') + '\n');
+          if (hits.length > 0) {
+            console.error('Security scan hits:\n' + hits.join('\n'));
+            process.exit(1);
+          }
+          EOF
+
+      - name: Mint dalroot-muse-bot Token (Optional)
+        id: app_token
+        if: ${{ secrets.MUSE_BOT_APP_ID != '' && secrets.MUSE_BOT_PRIVATE_KEY != '' }}
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.MUSE_BOT_APP_ID }}
+          private-key: ${{ secrets.MUSE_BOT_PRIVATE_KEY }}
+
+      - name: Post Muse Bot Audit Comment (Optional)
+        if: ${{ steps.app_token.outputs.token != '' }}
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "### 🤖 \`dalroot-muse-bot[bot]\` Automated Security & Test Audit (\`${SHA:0:7}\`)
+
+          - ✅ **Gitleaks Secret Scan:** 0 leaks
+          - ✅ **Static Dangerous-Pattern Scan:** 0 hits (\`private_key\`, \`tls_bypass\`, \`dynamic_eval\`, \`github_token\`, \`local_home_path\`)
+          - ✅ **Offline Test Suite (\`npm test\`):** Passed
+          - ✅ **Dependency Audit (\`npm audit --audit-level=high\`):** Passed"
